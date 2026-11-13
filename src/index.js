@@ -334,37 +334,137 @@ export class SmartRateLimitPlugin {
 
   /**
    * 注册请求拦截器
-   * 如果 DSH 提供了请求中间件机制，在此注册
+   * 对接 DSH 的 llm/stream 钩子：包装流式响应，在首个 chunk 前 acquire、流结束后 release
    */
   registerRequestInterceptor() {
-    // 监听 DSH 的请求发送事件（如果有）
-    if (this.ctx.on && typeof this.ctx.on === 'function') {
-      this.ctx.on('llm-request', async (request) => {
-        if (!this.initialized) return request;
-        
-        try {
-          return await this.interceptor.intercept(request);
-        } catch (error) {
-          console.error('[SmartRateLimit] Request intercept failed:', error);
-          return request; // 失败时放行，不阻断正常流程
-        }
-      });
-      
-      this.ctx.on('llm-response', async (request, response) => {
-        if (!this.initialized) return response;
-        
-        try {
-          return await this.interceptor.postProcess(request, response);
-        } catch (error) {
-          if (error.message === 'RATE_LIMIT_EXCEEDED') {
-            // 429 已在 postProcess 中处理，重新抛出让上层处理重试
-            throw error;
+    if (!this.ctx.on || typeof this.ctx.on !== 'function') return;
+
+    const interceptor = this.interceptor;
+    const buildResponse = this.buildResponseFromChunks.bind(this);
+
+    this.ctx.on('llm/stream', (request, stream) => {
+      if (!this.initialized || !stream) return stream;
+
+      // 如果请求已标记跳过限速，直接透传
+      if (request._skipRateLimit || request._isPolling) return stream;
+
+      // 创建 TransformStream 包装器
+      // - start: 流开始被消费时调用 acquire()
+      // - transform: 透传 chunk
+      // - flush: 流结束（正常或异常）时调用 postProcess()
+      let acquired = false;
+      let requestWithRatelimit = null;
+      let chunks = [];
+      let streamEnded = false;
+      let streamError = null;
+
+      const transformer = new TransformStream({
+        async start(controller) {
+          // 流开始被消费：执行 acquire
+          try {
+            requestWithRatelimit = await interceptor.intercept(request);
+            acquired = true;
+          } catch (error) {
+            // acquire 失败（如 RPD 超限）：直接报错，不阻断原流
+            controller.error(error);
+            return;
           }
-          console.error('[SmartRateLimit] Response process failed:', error);
-          return response;
+        },
+        transform(chunk, controller) {
+          // 缓存 chunk 用于后续 release 时重构响应
+          chunks.push(chunk);
+          controller.enqueue(chunk);
+        },
+        async flush(controller) {
+          streamEnded = true;
+          if (!acquired || !requestWithRatelimit) return;
+
+          // 从流式 chunks 重构类响应对象供 postProcess 使用
+          const response = buildResponse(chunks, streamError);
+          
+          try {
+            await interceptor.postProcess(requestWithRatelimit, response);
+          } catch (error) {
+            // 429 (RATE_LIMIT_EXCEEDED) 需要向上抛出让 DSH 重试
+            if (error.message === 'RATE_LIMIT_EXCEEDED') {
+              controller.error(error);
+            }
+            // 其他错误只记录不阻断
+            else {
+              console.error('[SmartRateLimit] Stream postProcess failed:', error);
+            }
+          }
         }
       });
+
+      // 捕获流错误，确保 flush 能拿到 error
+      const wrappedStream = stream.pipeThrough(transformer);
+      wrappedStream.getReader().closed.catch(err => {
+        streamError = err;
+        if (!streamEnded && acquired && requestWithRatelimit) {
+          // 流异常中断，手动触发 flush 逻辑
+          const response = buildResponse(chunks, err);
+          interceptor.postProcess(requestWithRatelimit, response).catch(() => {});
+        }
+      });
+
+      return wrappedStream;
+    });
+  }
+
+  /**
+   * 从流式 chunks 重构响应对象供 postProcess 使用
+   * 兼容 SSE 格式和普通 JSON chunk 格式
+   */
+  buildResponseFromChunks(chunks, error = null) {
+    if (error) {
+      return {
+        status: 0,
+        statusText: error.message || 'Stream error',
+        headers: {},
+        data: null,
+        _streamError: true,
+        _streamErrorDetail: error
+      };
     }
+
+    // 尝试解析最后一个有效的 data chunk 作为完整响应
+    // DSH 的流式响应通常最后会发送完整的 response 对象
+    let lastData = null;
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      const chunk = chunks[i];
+      if (chunk && typeof chunk === 'object' && chunk.data) {
+        lastData = chunk;
+        break;
+      }
+      // SSE 格式：{ data: '...' } 或直接是字符串
+      if (chunk && typeof chunk === 'object' && chunk.choices) {
+        lastData = chunk;
+        break;
+      }
+    }
+
+    if (lastData) {
+      return {
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        data: lastData,
+        _streaming: true,
+        _chunkCount: chunks.length
+      };
+    }
+
+    // 兜底：返回基础成功响应
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { choices: [] },
+      _streaming: true,
+      _chunkCount: chunks.length,
+      _incomplete: true
+    };
   }
 
   /**

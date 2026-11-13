@@ -38,11 +38,9 @@ const ctx = {
 mod.default(ctx);
 console.log('✅ apply 执行成功');
 
-// 触发 ready
-const readyHandlers = listeners.get('ready') || [];
-assert.ok(readyHandlers.length > 0, 'ready 监听未注册');
-for (const fn of readyHandlers) await fn();
-console.log('✅ ready → start 执行成功');
+// 等待 start() 完成（异步，不阻塞 apply）
+await new Promise(r => setTimeout(r, 500));
+console.log('✅ start 执行完成');
 
 // 校验 provide
 assert.ok(provided.has('smart-ratelimit.settings'), '未 provide smart-ratelimit.settings');

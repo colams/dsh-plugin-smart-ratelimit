@@ -99,9 +99,11 @@ const finalResponse = await ratelimit.release(request, response)
 
 `acquire()` 返回的是原请求对象加上 `_ratelimit` 字段；`release()` 必须接收这个带标记的对象，否则会跳过结算。
 
-**`isFreeModel` 注意事项**：内置的 `nvidia` / `agnes` 预设和面板默认值里，`applyToFreeModelsOnly` 都是 `true`。这时只有 `isFreeModel: true` 的请求才会被限速；没有传该字段的请求会直接放行（`bypassed: true`）。如果希望所有请求都受约束，调用方应显式传 `isFreeModel: true`，或在配置里把 `applyToFreeModelsOnly` 设为 `false`。
+**`isFreeModel` 注意事项**：内置的 `nvidia` / `agnes` 预设和面板默认值里，`applyToFreeModelsOnly` 都是 `true`。这时只有 `isFreeModel: true` 的请求才会被限速；没有传该字段的请求会直接放行（`bypassed: true`）。如果希望所有请求都受约束，调用方应显式传 `isFreeModel: true`，或在配置里把 `applyToFreeModelsOnly` 设为 `false``.
 
-**尚未接入对话主链路**：`src/index.js` 注册了 `llm-request` / `llm-response` 监听器，但当前 DSH 版本实际的模型请求钩子是 `llm/stream`，这两个事件不会被触发。因此普通对话不会自动经过限速器；需要调用方按上面的方式使用服务，或在后续版本改为包装 `llm/stream`。
+**已接入对话主链路**：`src/index.js` 现注册 `llm/stream` 监听器，使用 `TransformStream` 包装流式响应——首个 chunk 被消费前调用 `interceptor.intercept()`（acquire），流结束（正常或异常）后调用 `interceptor.postProcess()`（release/结算）。普通对话现在会自动经过限速器并计入统计。
+
+**指标去重修复**：`metricsTracker.recordRequest()` 现在仅在 `DualRateLimiter.acquire()` 第 447 行调用一次。`RequestInterceptor.intercept()` 不再重复记录。子限速器通过 `_skipMetrics: true` 显式跳过记录，由主限速器统一聚合，消除了约 2× 的 RPM/TPM 数值放大问题。
 
 ## 核心流程
 

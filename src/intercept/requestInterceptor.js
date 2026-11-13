@@ -135,10 +135,7 @@ export class RequestInterceptor {
         _isPolling: request._isPolling
       });
       
-      // 记录指标（跳过的请求不重复统计，_skipRateLimit 请求已在 acquire 中标记 skipped）
-      if (!result.skipped) {
-        metricsTracker.recordRequest(providerId, result.estimatedTokens);
-      }
+      // 指标已在 limiter.acquire() 中统一记录（含 _skipMetrics 去重），此处不再重复记录
       
       return {
         ...request,
