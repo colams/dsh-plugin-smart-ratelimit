@@ -9,6 +9,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { historyTracker, metricsTracker } from './metricsTracker.js';
+import { estimateTokens } from './tokenEstimator.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_DIR = join(__dirname, '..', 'config');
@@ -338,28 +339,6 @@ export class DualRateLimiter extends EventEmitter {
   }
 
   /**
-   * 估算请求 Token 消耗
-   * 中文约 1.5 tokens/字，英文约 0.3 tokens/词
-   */
-  estimateTokens(messages, maxTokens = 1024) {
-    let charCount = 0;
-    let wordCount = 0;
-    
-    for (const msg of messages) {
-      const content = msg.content || '';
-      // 统计中文字符
-      const chineseMatches = content.match(/[\u4e00-\u9fff]/g);
-      charCount += chineseMatches ? chineseMatches.length : 0;
-      // 统计英文单词
-      const englishWords = content.match(/[a-zA-Z]+/g);
-      wordCount += englishWords ? englishWords.length : 0;
-    }
-    
-    const estimatedInputTokens = Math.ceil(charCount * 1.5 + wordCount * 0.3);
-    return estimatedInputTokens + maxTokens;
-  }
-
-  /**
    * 核心请求入口 - 双重令牌校验 + FIFO 排队
    */
   async acquire(request) {
@@ -391,8 +370,8 @@ export class DualRateLimiter extends EventEmitter {
       });
     }
     
-    // 2. Token 预估
-    const estimatedTokens = this.estimateTokens(messages, max_tokens);
+    // 2. Token 预估（使用统一的 tokenEstimator，支持模型特定校准）
+    const estimatedTokens = estimateTokens(messages, modelId, max_tokens);
     
     // 3. 检查子限速器
     const subLimiter = await this.getSubLimiter(modelId);

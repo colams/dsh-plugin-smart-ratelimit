@@ -11,6 +11,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DualRateLimiter, SmoothTokenBucket, SlidingWindowTracker, DailyQuotaBreaker } from '../src/dualRateLimiter.js';
 import { historyTracker } from '../src/metricsTracker.js';
+import { estimateTokens } from '../src/tokenEstimator.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HISTORY_FILE = join(__dirname, '..', 'config', 'rate_limit_429_history.json');
@@ -318,23 +319,15 @@ describe('DualRateLimiter - 核心功能', () => {
   });
 
   it('estimateTokens 正确估算 Token', () => {
-    const limiter = new DualRateLimiter('test-provider', {
-      rpm: 60,
-      tpm: 60000,
-      rpd: 1000,
-      enabled: true,
-      backoffStrategy: 'fixed',
-      fixedBackoffSeconds: 15
-    });
-    
     const messages = [
       { role: 'user', content: '你好世界' }, // 4 个中文字符 ≈ 6 tokens
       { role: 'assistant', content: 'Hello world' } // 2 个英文单词 ≈ 0.6 tokens
     ];
     
-    const estimated = limiter.estimateTokens(messages, 100);
-    // 约 6 + 0.6 + 100 = 106.6 → 107
-    assert.ok(estimated >= 105 && estimated <= 110);
+    const estimated = estimateTokens(messages, null, 100);
+    // 新估算器包含消息格式开销、标点符号等，预估值会略高
+    // 约 4*1.5 + 2*0.3 + 100 + 格式开销 ≈ 113
+    assert.ok(estimated >= 105 && estimated <= 120);
   });
 });
 
