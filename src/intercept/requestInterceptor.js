@@ -311,6 +311,73 @@ export class RequestInterceptor {
   }
 
   /**
+   * 移除某 provider 的本插件限速配置。
+   * 只删除本插件保存的配置与限速器，不影响 DSH 自身的 provider 定义。
+   * @param {string} providerId
+   * @returns {boolean} 是否确实删除了一条配置
+   */
+  removeSettings(providerId) {
+    const had = this.settings && Object.prototype.hasOwnProperty.call(this.settings, providerId);
+    if (had) {
+      delete this.settings[providerId];
+      try {
+        writeFileSync(SETTINGS_FILE, JSON.stringify(this.settings, null, 2));
+      } catch (error) {
+        console.error('[RequestInterceptor] Failed to save settings:', error.message);
+      }
+    }
+    this.manager.removeLimiter(providerId);
+    return had;
+  }
+
+  /**
+   * 读取用户手动新增的 provider 列表（持久化在设置文件的 __customProviders 键）。
+   * @returns {Array<{id: string, displayName: string, baseUrl: string}>}
+   */
+  getCustomProviders() {
+    const list = this.settings && this.settings.__customProviders;
+    return Array.isArray(list) ? list : [];
+  }
+
+  /**
+   * 写入用户手动新增的 provider 列表。
+   * @param {Array<{id: string, displayName: string, baseUrl: string}>} list
+   */
+  setCustomProviders(list) {
+    if (!this.settings) this.settings = {};
+    this.settings.__customProviders = Array.isArray(list) ? list : [];
+    try {
+      writeFileSync(SETTINGS_FILE, JSON.stringify(this.settings, null, 2));
+    } catch (error) {
+      console.error('[RequestInterceptor] Failed to save settings:', error.message);
+    }
+  }
+
+  /**
+   * 读取用户显式移除的 provider id 列表（持久化在 __removedProviders）。
+   * 这些 provider 不再出现在面板中，也不参与限速。
+   * @returns {string[]}
+   */
+  getRemovedProviders() {
+    const list = this.settings && this.settings.__removedProviders;
+    return Array.isArray(list) ? list.filter((id) => typeof id === 'string') : [];
+  }
+
+  /**
+   * 写入用户显式移除的 provider id 列表。
+   * @param {string[]} list
+   */
+  setRemovedProviders(list) {
+    if (!this.settings) this.settings = {};
+    this.settings.__removedProviders = Array.isArray(list) ? list : [];
+    try {
+      writeFileSync(SETTINGS_FILE, JSON.stringify(this.settings, null, 2));
+    } catch (error) {
+      console.error('[RequestInterceptor] Failed to save settings:', error.message);
+    }
+  }
+
+  /**
    * 获取实时监控数据
    */
   getMonitorData(providerId) {

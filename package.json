@@ -1,11 +1,16 @@
 {
   "name": "dsh-plugin-smart-ratelimit",
-  "version": "1.0.0",
-  "description": "DSH 通用多提供商智能限速与容错插件 - 支持 RPM/TPM 双维度令牌桶、429 自学习历史、Vue 3 设置面板",
+  "version": "1.0.4",
+  "description": "DSH 通用多提供商智能限速与容错插件 - 支持 RPM/TPM 双维度令牌桶、429 自学习历史、React 设置面板",
   "type": "module",
   "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/ui/client.js"
+  },
   "scripts": {
     "test": "node --test test/dualRateLimiter.test.js test/integration.test.js",
+    "smoke": "node scripts/smoke-server.mjs && node scripts/smoke-client.mjs",
     "probe": "node scripts/probeModels.mjs",
     "lint": "echo \"No linter configured\""
   },
@@ -36,26 +41,34 @@
     "src/intercept/requestInterceptor.js",
     "src/intercept/nvcfPoller.js",
     "src/history/metricsTracker.js",
-    "src/ui/RateLimitSettingsView.vue",
+    "src/ui/RateLimitSettingsView.css",
+    "src/ui/client.js",
     "config/default_presets.json",
     "config/rate_limit_settings.json",
     "config/rate_limit_429_history.json",
     "config/probed_model_limits.json",
-    "scripts/probeModels.mjs"
+    "scripts/probeModels.mjs",
+    "cordis.patch.yml"
   ],
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "plugin": {
       "name": "smart-ratelimit",
       "displayName": "智能限速中心",
       "entry": "src/index.js",
       "settings": {
-        "panel": "src/ui/RateLimitSettingsView.vue",
+        "panel": "src/ui/client.js",
         "category": "network"
       }
+    },
+    "client": {
+      "platform": "web"
     }
   }
 }
