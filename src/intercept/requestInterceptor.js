@@ -242,7 +242,7 @@ export class RequestInterceptor {
    * @param {number} retryCount - 当前重试次数 (0-based)
    */
   calculateBackoff(config, response, retryCount = 0) {
-    const strategy = config.backoffStrategy || 'exponential';
+    const strategy = config.backoffStrategy || 'auto';
     
     // 优先读取 Retry-After 头
     const retryAfter = response.headers?.['retry-after'];

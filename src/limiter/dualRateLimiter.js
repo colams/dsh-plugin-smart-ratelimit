@@ -266,8 +266,9 @@ export class DualRateLimiter extends EventEmitter {
       tpm: config.tpm || 0,
       rpd: config.rpd || 0,
       enabled: config.enabled !== false,
-      applyToFreeModelsOnly: config.applyToFreeModelsOnly || false,
-      backoffStrategy: config.backoffStrategy || 'exponential',
+      // 默认开启：只对免费档模型限速。显式传 false 才关闭。
+      applyToFreeModelsOnly: config.applyToFreeModelsOnly !== false,
+      backoffStrategy: config.backoffStrategy || 'auto',
       fixedBackoffSeconds: config.fixedBackoffSeconds || 60,
       ...config
     };
@@ -393,8 +394,10 @@ export class DualRateLimiter extends EventEmitter {
       return { allowed: true, skipped: true };
     }
     
-    // applyToFreeModelsOnly: 仅对免费模型限速，付费模型直接放行
-    if (this.config.applyToFreeModelsOnly && !isFreeModel) {
+    // applyToFreeModelsOnly: 仅对免费模型限速，付费模型直接放行。
+    // 只有调用方明确标记 isFreeModel === false（付费/高配额）才绕过；
+    // 未标记的请求按限速处理，避免默认开启后误放行。
+    if (this.config.applyToFreeModelsOnly && isFreeModel === false) {
       return { allowed: true, bypassed: true };
     }
     

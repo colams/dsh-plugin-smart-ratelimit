@@ -37,8 +37,8 @@ export function getGlobalFallbackConfig() {
     tpm: 0,
     rpd: 0,
     enabled: true,
-    applyToFreeModelsOnly: false,
-    backoffStrategy: 'exponential',
+    applyToFreeModelsOnly: true,
+    backoffStrategy: 'auto',
     fixedBackoffSeconds: 60,
     priority: 'global_fallback'
   };

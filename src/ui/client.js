@@ -12,7 +12,7 @@ window.__ModuleLoader__.load({
   id: 'dsh-plugin-smart-ratelimit',
   factory: (require) => {
     const React = require('react')
-    const { useCallback, useEffect, useState } = React
+    const { useCallback, useEffect, useRef, useState } = React
     const h = React.createElement
 
     /** 面板 id（设置页 section id）。 */
@@ -44,7 +44,7 @@ window.__ModuleLoader__.load({
 }
 .rl-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
   padding: 11px 0;
@@ -78,21 +78,39 @@ window.__ModuleLoader__.load({
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .rl-row-main { flex: 1 1 auto; min-width: 0; }
-.rl-row-title { font-size: 14px; font-weight: 400; color: #1a1a2e; margin: 0; }
-.rl-row-desc { font-size: 12px; color: #8b8b8b; margin-top: 3px; line-height: 1.55; }
+.rl-row-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 14px; font-weight: 400; color: #1a1a2e; margin: 0;
+}
+/* 标题后的问号提示：悬停/聚焦显示浮动说明，替代行内浅灰描述。 */
+.rl-help {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 1px solid #d4d4d4; background: #fff; color: #9a9a9a;
+  font-size: 10px; font-weight: 600; line-height: 1; cursor: help;
+  flex-shrink: 0; outline: none; user-select: none;
+}
+.rl-help:hover, .rl-help:focus-visible { border-color: #4a7dff; color: #4a7dff; }
+.rl-tooltip {
+  position: fixed; z-index: 1000; width: 260px; padding: 8px 10px;
+  border-radius: 8px; background: #2a2a2e; color: #fff;
+  font-size: 12px; line-height: 1.55; text-align: left; white-space: normal;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.22); pointer-events: none;
+}
 .rl-row-control {
-  flex: 0 0 auto;
+  flex: 0 0 280px;
+  width: 280px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 10px;
-  min-width: 240px;
   padding-top: 1px;
 }
 .rl-switch {
   position: relative; width: 42px; height: 24px; border-radius: 12px;
   border: none; padding: 0; background: #e3e3e3; cursor: pointer;
   transition: background-color 0.18s ease; flex-shrink: 0;
+  margin-left: auto;
 }
 .rl-switch:disabled { opacity: 0.45; cursor: not-allowed; }
 .rl-switch[data-on='true'] { background: #1f1f1f; }
@@ -103,7 +121,8 @@ window.__ModuleLoader__.load({
 }
 .rl-switch[data-on='true'] .rl-switch-knob { transform: translateX(18px); }
 .rl-number {
-  width: 110px; padding: 6px 10px; font-size: 13px; font-family: inherit;
+  flex: 0 0 160px; width: 160px;
+  padding: 6px 10px; font-size: 13px; font-family: inherit;
   color: inherit; border: 1px solid #e3e3e3; border-radius: 8px; background: #fff;
   text-align: right; font-variant-numeric: tabular-nums; outline: none;
   transition: border-color 0.15s ease;
@@ -151,6 +170,7 @@ window.__ModuleLoader__.load({
 .rl-badge {
   display: inline-block; padding: 3px 9px; border-radius: 999px;
   font-size: 11px; font-weight: 500; background: #f4f4f4; color: #666;
+  margin-left: auto;
 }
 .rl-badge[data-priority='user_custom'] { background: #eaf1ff; color: #2f6bff; }
 .rl-badge[data-priority='history_calibrated'] { background: #fff4e0; color: #b06d00; }
@@ -178,7 +198,9 @@ window.__ModuleLoader__.load({
 @media (prefers-color-scheme: dark) {
   .rate-limit-settings-view { color: #e8e8ea; }
   .rl-row-title { color: #e8e8ea; }
-  .rl-row-desc, .rl-unit, .rl-monitor-label, .rl-group-title { color: #9a9aa0; }
+  .rl-unit, .rl-monitor-label, .rl-group-title { color: #9a9aa0; }
+  .rl-help { background: #2a2a2e; border-color: #3a3a40; color: #9a9aa0; }
+  .rl-tooltip { background: #f0f0f2; color: #1a1a2e; }
   .rl-row-card { background: #232327; border-color: #33333a; }
   .rl-number, .rl-select, .rl-btn { background: #2a2a2e; color: #e8e8ea; border-color: #3a3a40; }
   .rl-btn[data-variant='primary'] { background: #4a7dff; border-color: #4a7dff; color: #fff; }
@@ -405,12 +427,57 @@ window.__ModuleLoader__.load({
       return next
     }
 
-    /** 单行设置项：左标题+描述，右控件。 */
+    /** 标题后的问号提示：悬停或聚焦时显示浮动说明。 */
+    function HelpTip({ text }) {
+      const [tip, setTip] = useState(null)
+      const ref = useRef(null)
+
+      const show = () => {
+        const el = ref.current
+        if (!el || !text) return
+        const rect = el.getBoundingClientRect()
+        const width = 260
+        const margin = 8
+        const left = Math.min(
+          Math.max(rect.left + rect.width / 2, width / 2 + margin),
+          window.innerWidth - width / 2 - margin,
+        )
+        // 上方空间不足时改为向下展开，避免贴顶被裁掉。
+        const above = rect.top > 120
+        setTip({ left, top: above ? rect.top - 8 : rect.bottom + 8, above })
+      }
+      const hide = () => setTip(null)
+
+      return h('span', {
+        className: 'rl-help',
+        ref,
+        tabIndex: 0,
+        role: 'button',
+        'aria-label': text,
+        onMouseEnter: show,
+        onMouseLeave: hide,
+        onFocus: show,
+        onBlur: hide,
+      },
+        '?',
+        tip
+          ? h('span', {
+              className: 'rl-tooltip',
+              style: {
+                left: tip.left + 'px',
+                top: tip.top + 'px',
+                transform: tip.above ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
+              },
+            }, text)
+          : null,
+      )
+    }
+
+    /** 单行设置项：左标题（带问号提示），右控件。 */
     function Row({ title, desc, children }) {
       return h('div', { className: 'rl-row' },
         h('div', { className: 'rl-row-main' },
-          h('div', { className: 'rl-row-title' }, title),
-          desc ? h('div', { className: 'rl-row-desc' }, desc) : null,
+          h('div', { className: 'rl-row-title' }, title, desc ? h(HelpTip, { text: desc }) : null),
         ),
         h('div', { className: 'rl-row-control' }, children),
       )
@@ -571,9 +638,9 @@ window.__ModuleLoader__.load({
       const resetToDefault = useCallback(() => {
         if (!providerId || !window.confirm(dict.confirmReset)) return
         const presets = {
-          nvidia: { rpm: 40, tpm: 0, rpd: 10000, backoffStrategy: 'fixed', fixedBackoffSeconds: 15 },
-          agnes: { rpm: 20, tpm: 40000, rpd: 0, backoffStrategy: 'exponential', fixedBackoffSeconds: 60 },
-          default: { rpm: 60, tpm: 0, rpd: 0, backoffStrategy: 'exponential', fixedBackoffSeconds: 60 },
+          nvidia: { rpm: 40, tpm: 0, rpd: 10000, backoffStrategy: 'auto', fixedBackoffSeconds: 15, applyToFreeModelsOnly: true },
+          agnes: { rpm: 20, tpm: 40000, rpd: 0, backoffStrategy: 'auto', fixedBackoffSeconds: 60, applyToFreeModelsOnly: true },
+          default: { rpm: 60, tpm: 0, rpd: 0, backoffStrategy: 'auto', fixedBackoffSeconds: 60, applyToFreeModelsOnly: true },
         }
         const preset = presets[providerId] || presets.default
         const next = { ...form, ...preset, priority: 'default_preset' }
@@ -709,13 +776,12 @@ window.__ModuleLoader__.load({
             }, busy === 'remove' ? dict.removing : dict.removeProvider),
           )
 
-      // 服务商卡片：标题与操作同一行，描述通栏放在下方，避免描述被控件挤成多行。
+      // 服务商卡片：标题（带问号提示）与操作同一行。
       const providerRow = h('div', { className: 'rl-row-card' },
         h('div', { className: 'rl-provider-head' },
-          h('div', { className: 'rl-row-title' }, dict.provider),
+          h('div', { className: 'rl-row-title' }, dict.provider, h(HelpTip, { text: dict.providerDesc })),
           providerControl,
         ),
-        h('div', { className: 'rl-row-desc' }, dict.providerDesc),
       )
 
       // 新增 provider 的内联表单

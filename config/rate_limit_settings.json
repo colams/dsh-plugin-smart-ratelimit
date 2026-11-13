@@ -5,7 +5,7 @@
     "rpd": 10000,
     "enabled": true,
     "applyToFreeModelsOnly": true,
-    "backoffStrategy": "fixed",
+    "backoffStrategy": "auto",
     "fixedBackoffSeconds": 15,
     "priority": "user_custom"
   },
@@ -15,7 +15,7 @@
     "rpd": 0,
     "enabled": true,
     "applyToFreeModelsOnly": true,
-    "backoffStrategy": "exponential",
+    "backoffStrategy": "auto",
     "fixedBackoffSeconds": 60,
     "priority": "user_custom"
   }

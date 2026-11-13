@@ -40,27 +40,10 @@ export async function discoverProviders() {
       return getDefaultProviders();
     }
     
-    // DSH 内置的 llm 插件各自注册一个 provider，它们不在 llm-pi-ai 的 providers 里。
-    // 映射关系（见 @deepseek-ai/dsh-llm-deepseek-*）：插件条目 id -> provider id。
-    const builtinProviders = [
-      { entryId: 'llm-deepseek-account', id: 'deepseek-account', displayName: 'DeepSeek 账号' },
-      { entryId: 'llm-deepseek', id: 'deepseek-official', displayName: 'DeepSeek' }
-    ];
-
     const seen = new Set();
 
-    // 1) 先收内置 provider（顺序由 builtinProviders 决定：账号在前，与「设置 → 模型」一致）
-    for (const hit of builtinProviders) {
-      const entry = parsed.find((item) => item && typeof item === 'object' && item.id === hit.entryId);
-      if (!entry) continue;
-      // 显式 disabled 的不计入
-      if (entry.disabled === true) continue;
-      if (seen.has(hit.id)) continue;
-      seen.add(hit.id);
-      providers.push({ id: hit.id, displayName: hit.displayName, baseUrl: '' });
-    }
-
-    // 2) 再展开 llm-pi-ai 的自定义 provider 列表
+    // 只收集 llm-pi-ai 下配置的 provider。DSH 内置的 DeepSeek 账号 / DeepSeek 直连
+    // 由官方插件自己管理限速，本插件不再把它们列入服务商列表。
     for (const entry of parsed) {
       if (!entry || entry.id !== 'llm-pi-ai' || !entry.config || !entry.config.providers) continue;
       for (const [providerId, providerConfig] of Object.entries(entry.config.providers)) {
