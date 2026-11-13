@@ -1,0 +1,20 @@
+# DSH 桌面端 Cordis 配置补丁
+# 将智能限速插件自动挂载至 DSH 桌面端 profile
+# 安装方式：将此文件放置于 ~/.dsh/profiles/desktop/cordis.patch.yml
+# 或在现有 cordis.patch.yml 中合并以下内容
+
+- insert:
+    - id: smart-ratelimit
+      name: dsh-plugin-smart-ratelimit
+      # 可选：为各 Provider 声明全局重试策略，确保与插件协同
+      # retryPolicy:
+      #   nvidia:
+      #     - RATE_LIMIT
+      #     - TRANSPORT
+      #     - STREAM_CLOSED
+      #     - SERVER
+      #   agnes:
+      #     - RATE_LIMIT
+      #     - TRANSPORT
+      #     - STREAM_CLOSED
+      #     - SERVER

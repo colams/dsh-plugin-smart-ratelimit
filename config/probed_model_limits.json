@@ -1,0 +1,30 @@
+{
+  "nvidia": {
+    "nvidia/nemotron-3-ultra-550b-a55b": {
+      "rpm": 30,
+      "tpm": 80000,
+      "probedAt": null,
+      "probedRpm": null,
+      "probedTpm": null,
+      "confidence": 0
+    }
+  },
+  "agnes": {
+    "agnes-vision-3k": {
+      "rpm": 15,
+      "tpm": 30000,
+      "probedAt": null,
+      "probedRpm": null,
+      "probedTpm": null,
+      "confidence": 0
+    },
+    "agnes-vision-4k": {
+      "rpm": 10,
+      "tpm": 20000,
+      "probedAt": null,
+      "probedRpm": null,
+      "probedTpm": null,
+      "confidence": 0
+    }
+  }
+}

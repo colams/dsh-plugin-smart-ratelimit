@@ -1,0 +1,45 @@
+{
+  "nvidia": {
+    "displayName": "NVIDIA NIM",
+    "rpm": 40,
+    "tpm": 0,
+    "rpd": 10000,
+    "backoffStrategy": "fixed",
+    "fixedBackoffSeconds": 15,
+    "retryPolicy": ["RATE_LIMIT", "TRANSPORT", "STREAM_CLOSED", "SERVER"],
+    "constraints": {
+      "quotaScope": "account_global",
+      "hasRetryAfterHeader": false,
+      "hasXRateLimitHeaders": false
+    }
+  },
+  "agnes": {
+    "displayName": "Agnes AI 官方站",
+    "rpm": 20,
+    "tpm": 40000,
+    "rpd": 0,
+    "backoffStrategy": "exponential",
+    "fixedBackoffSeconds": 60,
+    "retryPolicy": ["RATE_LIMIT", "TRANSPORT", "STREAM_CLOSED", "SERVER"],
+    "constraints": {
+      "quotaScope": "account_global",
+      "hasRetryAfterHeader": false,
+      "hasXRateLimitHeaders": false,
+      "imageQuotaSeparate": true
+    }
+  },
+  "default": {
+    "displayName": "通用提供商",
+    "rpm": 60,
+    "tpm": 0,
+    "rpd": 0,
+    "backoffStrategy": "exponential",
+    "fixedBackoffSeconds": 60,
+    "retryPolicy": ["RATE_LIMIT", "TRANSPORT", "STREAM_CLOSED", "SERVER"],
+    "constraints": {
+      "quotaScope": "provider_key",
+      "hasRetryAfterHeader": true,
+      "hasXRateLimitHeaders": true
+    }
+  }
+}

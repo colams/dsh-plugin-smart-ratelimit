@@ -1,0 +1,54 @@
+{
+  "name": "dsh-plugin-smart-ratelimit",
+  "version": "1.0.0",
+  "description": "DSH 通用多提供商智能限速与容错插件 - 支持 RPM/TPM 双维度令牌桶、429 自学习历史、Vue 3 设置面板",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test test/dualRateLimiter.test.js",
+    "probe": "node scripts/probeModels.mjs",
+    "lint": "echo \"No linter configured\""
+  },
+  "keywords": [
+    "dsh",
+    "plugin",
+    "rate-limit",
+    "token-bucket",
+    "nvidia",
+    "agnes-ai",
+    "smart-ratelimit"
+  ],
+  "author": "DSH Plugin Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "js-yaml": "^5.5.0"
+  },
+  "files": [
+    "src/index.js",
+    "src/dualRateLimiter.js",
+    "src/requestInterceptor.js",
+    "src/providerDiscovery.js",
+    "src/historyTracker.js",
+    "src/metricsTracker.js",
+    "src/smartClient.js",
+    "src/ui/RateLimitSettingsView.vue"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dsh": {
+    "plugin": {
+      "name": "smart-ratelimit",
+      "displayName": "智能限速中心",
+      "entry": "src/index.js",
+      "settings": {
+        "panel": "src/ui/RateLimitSettingsView.vue",
+        "category": "network"
+      }
+    }
+  }
+}

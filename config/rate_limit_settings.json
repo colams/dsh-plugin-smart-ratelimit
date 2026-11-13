@@ -1,0 +1,22 @@
+{
+  "nvidia": {
+    "rpm": 40,
+    "tpm": 0,
+    "rpd": 10000,
+    "enabled": true,
+    "applyToFreeModelsOnly": true,
+    "backoffStrategy": "fixed",
+    "fixedBackoffSeconds": 15,
+    "priority": "user_custom"
+  },
+  "agnes": {
+    "rpm": 20,
+    "tpm": 40000,
+    "rpd": 0,
+    "enabled": true,
+    "applyToFreeModelsOnly": true,
+    "backoffStrategy": "exponential",
+    "fixedBackoffSeconds": 60,
+    "priority": "user_custom"
+  }
+}

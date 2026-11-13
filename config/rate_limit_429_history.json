@@ -1,0 +1,19 @@
+{
+  "test-provider": {
+    "lastTriggeredAt": "2026-11-13T08:59:05.695Z",
+    "triggeredAtRpm": 2,
+    "triggeredAtTpm": 202,
+    "model": "test-model",
+    "suggestedSafeRpm": 1,
+    "suggestedSafeTpm": 181,
+    "total429Count": 1,
+    "records": [
+      {
+        "timestamp": "2026-11-13T08:59:05.695Z",
+        "rpm": 2,
+        "tpm": 202,
+        "model": "test-model"
+      }
+    ]
+  }
+}
