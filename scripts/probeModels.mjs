@@ -409,7 +409,9 @@ async function main() {
       if (results.tpm > 0) {
         settings[options.provider].tpm = results.tpm;
       }
-      settings[options.provider].priority = 'probed';
+      // 注意：rate_limit_settings.json 即 user_custom 层（5 层优先级最高），
+      // 写入的标记必须是 'user_custom' 而非 'probed'（probed 仅用于 probed_model_limits.json）
+      settings[options.provider].priority = 'user_custom';
       
       writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
       console.log(`\n[更新] 已同步更新至 ${SETTINGS_FILE}`);

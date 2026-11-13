@@ -32,6 +32,6 @@ pnpm-debug.log*
 # 测试覆盖率
 coverage/
 
-# 临时文件
-*.tmp
-*.temp
+# 测试隔离用临时配置目录
+test/.test-config-tmp/
+test/.test-config-integration/

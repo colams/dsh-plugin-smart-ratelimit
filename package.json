@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "test": "node --test test/dualRateLimiter.test.js",
+    "test": "node --test test/dualRateLimiter.test.js test/integration.test.js",
     "probe": "node scripts/probeModels.mjs",
     "lint": "echo \"No linter configured\""
   },
@@ -28,13 +28,20 @@
   },
   "files": [
     "src/index.js",
-    "src/dualRateLimiter.js",
-    "src/requestInterceptor.js",
-    "src/providerDiscovery.js",
-    "src/historyTracker.js",
-    "src/metricsTracker.js",
-    "src/smartClient.js",
-    "src/ui/RateLimitSettingsView.vue"
+    "src/core/tokenEstimator.js",
+    "src/limiter/dualRateLimiter.js",
+    "src/config/configPaths.js",
+    "src/config/configMerger.js",
+    "src/config/providerDiscovery.js",
+    "src/intercept/requestInterceptor.js",
+    "src/intercept/nvcfPoller.js",
+    "src/history/metricsTracker.js",
+    "src/ui/RateLimitSettingsView.vue",
+    "config/default_presets.json",
+    "config/rate_limit_settings.json",
+    "config/rate_limit_429_history.json",
+    "config/probed_model_limits.json",
+    "scripts/probeModels.mjs"
   ],
   "publishConfig": {
     "access": "public",

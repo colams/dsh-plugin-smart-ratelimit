@@ -9,7 +9,11 @@
  * - 支持 AbortSignal 取消
  */
 
-import { RequestInterceptor, requestInterceptor } from './requestInterceptor.js';
+// 仅导入单例 requestInterceptor（轮询请求通过它标记 _skipRateLimit 跳过扣减）
+// 不导入 RequestInterceptor 类（本模块不实例化），避免死导入
+// 注意：requestInterceptor.js 反向导入 nvcfPoller，形成循环依赖；
+// 这里只取单例（模块加载完成后才使用），node ESM 对循环依赖的导出绑定是延迟求值的，可正常工作
+import { requestInterceptor } from './requestInterceptor.js';
 
 /**
  * 默认轮询配置

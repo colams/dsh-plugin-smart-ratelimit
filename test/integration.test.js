@@ -1,35 +1,55 @@
 /**
  * integration.test.js - 集成测试与边界条件测试
  * 对应规格书 §8 验收测试矩阵补充
+ *
+ * 测试隔离：配置目录指向临时目录，避免污染仓库真实 config/ 文件。
+ * 注意：本文件必须在导入任何 src 模块之前设置 DSH_SMART_RATELIMIT_CONFIG_DIR。
  */
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { DualRateLimiter, RateLimiterManager, SmoothTokenBucket } from '../src/limiter/dualRateLimiter.js';
-import { metricsTracker, historyTracker } from '../src/history/metricsTracker.js';
-import { RequestInterceptor, requestInterceptor } from '../src/intercept/requestInterceptor.js';
-import { mergeProviderConfig, CONFIG_PRIORITY } from '../src/config/configMerger.js';
-import { nvcfPoller, NVCFPoller, classifyError } from '../src/intercept/nvcfPoller.js';
-import { estimateTokens, calibrateModel, HeuristicTokenEstimator } from '../src/core/tokenEstimator.js';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, copyFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = join(__dirname, '..', 'config');
+const PROJECT_CONFIG_DIR = join(__dirname, '..', 'config');
+
+// 测试隔离：临时配置目录
+const TEST_CONFIG_DIR = join(__dirname, '.test-config-integration');
+process.env.DSH_SMART_RATELIMIT_CONFIG_DIR = TEST_CONFIG_DIR;
+mkdirSync(TEST_CONFIG_DIR, { recursive: true });
+// 复制只读配置供测试使用
+for (const f of ['default_presets.json', 'probed_model_limits.json', 'rate_limit_settings.json']) {
+  const src = join(PROJECT_CONFIG_DIR, f);
+  if (existsSync(src)) copyFileSync(src, join(TEST_CONFIG_DIR, f));
+}
+writeFileSync(join(TEST_CONFIG_DIR, 'rate_limit_429_history.json'), '{}');
+
+const CONFIG_DIR = TEST_CONFIG_DIR;
 const HISTORY_FILE = join(CONFIG_DIR, 'rate_limit_429_history.json');
 const PROBED_FILE = join(CONFIG_DIR, 'probed_model_limits.json');
 const SETTINGS_FILE = join(CONFIG_DIR, 'rate_limit_settings.json');
 
+// 延迟导入 src 模块，确保 ConfigPaths 读到的是临时目录
+const { DualRateLimiter, RateLimiterManager, SmoothTokenBucket } = await import('../src/limiter/dualRateLimiter.js');
+const { metricsTracker, historyTracker } = await import('../src/history/metricsTracker.js');
+const { RequestInterceptor, requestInterceptor } = await import('../src/intercept/requestInterceptor.js');
+const { mergeProviderConfig, CONFIG_PRIORITY } = await import('../src/config/configMerger.js');
+const { nvcfPoller, NVCFPoller, classifyError } = await import('../src/intercept/nvcfPoller.js');
+const { estimateTokens, calibrateModel, HeuristicTokenEstimator } = await import('../src/core/tokenEstimator.js');
+
 // 测试前清理
 before(async () => {
-  // 清理历史文件
-  if (existsSync(HISTORY_FILE)) {
-    writeFileSync(HISTORY_FILE, '{}');
-  }
+  writeFileSync(HISTORY_FILE, '{}');
   historyTracker.clearAllHistory();
   metricsTracker.reset('test-provider');
   metricsTracker.reset('nvidia');
+});
+
+after(async () => {
+  rmSync(TEST_CONFIG_DIR, { recursive: true, force: true });
+  delete process.env.DSH_SMART_RATELIMIT_CONFIG_DIR;
 });
 
 describe('配置优先级合并测试', () => {
@@ -193,6 +213,59 @@ describe('请求拦截器集成测试', () => {
     assert.ok(result._ratelimit.limiter, '应包含限速器引用');
   });
   
+  it('轮询请求应跳过 RPM/TPM 扣减（_skipRateLimit 透传）', async () => {
+    const interceptor = new RequestInterceptor();
+    await interceptor.initialize({
+      'test-provider': { rpm: 60, tpm: 60000 }
+    });
+    
+    // 模拟 NVCF 轮询请求：标记 _skipRateLimit，应跳过扣减
+    const request = {
+      providerId: 'test-provider',
+      modelId: 'test-model',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 100,
+      _skipRateLimit: true,
+      _isPolling: true
+    };
+    
+    const limiter = interceptor.manager.getLimiter('test-provider');
+    const rpmBefore = limiter.rpmBucket.tokens;
+    const tpmBefore = limiter.tpmBucket.tokens;
+    
+    const result = await interceptor.intercept(request);
+    
+    assert.ok(result._ratelimit?.allowed, '轮询请求应放行');
+    assert.ok(result._ratelimit?.skipped === true, '应标记为跳过扣减');
+    // RPM/TPM 桶水位不应因跳过的请求而下降
+    assert.ok(limiter.rpmBucket.tokens >= rpmBefore - 1, 'RPM 桶不应被轮询扣减');
+  });
+  
+  it('429 冷却门：并发 429 共享退避，冷却期内再次 429 应 reject', async () => {
+    const interceptor = new RequestInterceptor();
+    // 使用 3 秒固定退避：足够在 assert 时冷却门仍有效，又不让测试跑 60 秒
+    await interceptor.initialize({
+      'cooldown-provider': { rpm: 60, tpm: 60000, backoffStrategy: 'fixed', fixedBackoffSeconds: 3 }
+    });
+    
+    const request = {
+      providerId: 'cooldown-provider',
+      modelId: 'test-model',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 100
+    };
+    
+    const intercepted = await interceptor.intercept(request);
+    
+    // 第一次 429：创建 3s 冷却门，等待退避完成（~3s）
+    const first429 = interceptor.postProcess(intercepted, { status: 429, headers: {} });
+    await assert.rejects(first429, /RATE_LIMIT_EXCEEDED/);
+    
+    // 3s 冷却门解除后，冷却门应已删除（postProcess await 完成即表示退避已结束）
+    const cooldownGone = !interceptor._cooldowns.has('cooldown-provider');
+    assert.ok(cooldownGone, '退避完成后冷却门应已解除');
+  });
+  
   it('响应后处理应结算 token', async () => {
     const interceptor = new RequestInterceptor();
     await interceptor.initialize({
@@ -224,26 +297,52 @@ describe('请求拦截器集成测试', () => {
     assert.ok(tokensAfter < tokensBefore, '桶 token 应减少');
   });
   
-  it('429 响应应触发惩罚并抛出 RATE_LIMIT_EXCEEDED', async () => {
+  it('成功响应应推进 RPD 计数；429 响应不应计数', async () => {
     const interceptor = new RequestInterceptor();
     await interceptor.initialize({
-      'test-429-provider': { rpm: 60, tpm: 60000 }
+      'rpd-provider': { rpm: 60, tpm: 60000, rpd: 100 }
     });
     
+    const limiter = interceptor.manager.getLimiter('rpd-provider');
+    const countBefore = limiter.dailyQuota.count;
+    
+    // 模拟 200 成功响应 → RPD 计数 +1
+    const req1 = { providerId: 'rpd-provider', modelId: 'm', messages: [{ role: 'user', content: 'hi' }], max_tokens: 10 };
+    const intercepted1 = await interceptor.intercept(req1);
+    await interceptor.postProcess(intercepted1, { status: 200, data: {} });
+    assert.strictEqual(limiter.dailyQuota.count, countBefore + 1, '200 响应应推进 RPD 计数');
+    
+    // 模拟 429 响应（不推进计数）→ handle429 抛 RATE_LIMIT_EXCEEDED
+    const req2 = { providerId: 'rpd-provider', modelId: 'm', messages: [{ role: 'user', content: 'hi' }], max_tokens: 10 };
+    const intercepted2 = await interceptor.intercept(req2);
+    try {
+      await interceptor.postProcess(intercepted2, { status: 429, headers: {} });
+    } catch (e) {
+      assert.ok(e.message === 'RATE_LIMIT_EXCEEDED' || e.message === 'RATE_LIMIT_COOLDOWN');
+    }
+    assert.strictEqual(limiter.dailyQuota.count, countBefore + 1, '429 响应不应推进 RPD 计数');
+  });
+  
+  it('RPD 熔断：配额用尽时 acquire 应抛 ERR_RPD_EXCEEDED', async () => {
+    const interceptor = new RequestInterceptor();
+    await interceptor.initialize({
+      'rpd-exhausted': { rpm: 60, tpm: 60000, rpd: 1 }
+    });
+    
+    const limiter = interceptor.manager.getLimiter('rpd-exhausted');
+    // 手动用尽日配额
+    limiter.dailyQuota.recordUsage();
+    
     const request = {
-      providerId: 'test-429-provider',
-      modelId: 'test-model',
-      messages: [{ role: 'user', content: 'Hello' }],
-      max_tokens: 100
+      providerId: 'rpd-exhausted',
+      modelId: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 10
     };
     
-    const intercepted = await interceptor.intercept(request);
-    
-    const response = { status: 429, headers: {} };
-    
     await assert.rejects(
-      async () => await interceptor.postProcess(intercepted, response),
-      /RATE_LIMIT_EXCEEDED/
+      async () => await interceptor.intercept(request),
+      /ERR_RPD_EXCEEDED/
     );
   });
 });

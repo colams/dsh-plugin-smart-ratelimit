@@ -265,5 +265,3 @@ export default function apply(ctx) {
   // 导出实例供外部访问
   ctx.smartRateLimit = plugin;
 }
-
-export { SmartRateLimitPlugin };

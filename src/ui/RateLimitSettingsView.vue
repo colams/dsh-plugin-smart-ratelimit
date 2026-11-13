@@ -56,14 +56,14 @@
         <div class="warning-message">
           该服务商曾在 
           <strong>{{ historySuggestion.triggeredAtRpm }} RPM</strong> / 
-          <strong>{{ historySuggestion.triggeredAtTpm.toLocaleString() }} TPM</strong>
-          （模型 <code>{{ historySuggestion.model }}</code>）时触发 <code>429</code> 错误。
+          <strong>{{ (historySuggestion.triggeredAtTpm ?? 0).toLocaleString() }} TPM</strong>
+          （模型 <code>{{ historySuggestion.model || '未知模型' }}</code>）时触发 <code>429</code> 错误。
         </div>
         <div class="warning-recommendation">
           建议将安全上限调整为 
-          <strong>≤ {{ historySuggestion.suggestedSafeRpm }} RPM</strong>
+          <strong>≤ {{ historySuggestion.suggestedSafeRpm ?? '-' }} RPM</strong>
           / 
-          <strong>{{ historySuggestion.suggestedSafeTpm.toLocaleString() }} TPM</strong>
+          <strong>{{ (historySuggestion.suggestedSafeTpm ?? 0).toLocaleString() }} TPM</strong>
         </div>
         <div class="warning-actions">
           <button 
@@ -425,8 +425,7 @@ async function loadMonitorData(providerId) {
 async function onProviderChange() {
   await loadSettings(selectedProviderId.value)
   await loadMonitorData(selectedProviderId.value)
-  // 启动监控轮询
-  startMonitorPolling()
+  // 监控轮询由 watch(selectedProviderId) 统一启动，这里不重复调用，避免双触发
 }
 
 async function saveSettings() {
@@ -464,12 +463,13 @@ async function resetToDefault() {
 async function applySuggestion() {
   applyingSuggestion.value = true
   try {
+    // 后端 applySuggestion 已完成 updateConfig + 持久化，这里只需刷新本地表单展示
     const result = await rpcClient?.applySuggestion?.(selectedProviderId.value)
     if (result?.success && result.suggestion) {
       form.value.rpm = result.suggestion.suggestedSafeRpm
       form.value.tpm = result.suggestion.suggestedSafeTpm
+      // priority 徽章反映生效来源：应用建议值后即为历史校准值
       form.value.priority = 'history_calibrated'
-      await rpcClient?.saveSettings?.(selectedProviderId.value, form.value)
       showStatus('已应用历史建议值', 'success')
       await loadSettings(selectedProviderId.value)
     }
@@ -535,8 +535,10 @@ function showStatus(message, type = 'info') {
   }
 }
 
+const monitorPollingInterval = ref(null)
+
 function startMonitorPolling() {
-  // 清除旧的轮询
+  // 幂等：清除旧轮询后再启动，避免 watch 与 onProviderChange 双触发导致重复 interval
   if (monitorPollingInterval.value) {
     clearInterval(monitorPollingInterval.value)
   }
@@ -555,8 +557,6 @@ function stopMonitorPolling() {
     monitorPollingInterval.value = null
   }
 }
-
-const monitorPollingInterval = ref(null)
 
 // 获取 RPC 客户端（优先使用 inject，fallback 全局变量）
 function getRpcClient() {

@@ -204,6 +204,45 @@ export class DailyQuotaBreaker {
     return { allowed: true, remaining, warning };
   }
 
+  /**
+   * 请求前检查日配额是否已熔断（不推进计数；计数由 recordDailyQuotaUsage 在响应成功后推进）
+   * @returns {{allowed: boolean, error?: string, warning: boolean, remaining: number}}
+   */
+  checkDailyQuota() {
+    this.checkReset();
+    
+    if (this.limit <= 0) {
+      return { allowed: true, remaining: Infinity, warning: false };
+    }
+    
+    if (this.count >= this.limit) {
+      return { 
+        allowed: false, 
+        remaining: 0, 
+        warning: false, 
+        error: 'ERR_RPD_EXCEEDED' 
+      };
+    }
+    
+    const remaining = this.limit - this.count;
+    const warning = (this.count / this.limit) >= this.warnThreshold;
+    return { allowed: true, remaining, warning };
+  }
+
+  /**
+   * 响应成功后推进日配额计数（仅成功请求才消耗配额）
+   * @returns {{warning: boolean, remaining: number}}
+   */
+  recordUsage() {
+    this.checkReset();
+    if (this.limit <= 0) return { warning: false, remaining: Infinity };
+    
+    this.count++;
+    const remaining = this.limit - this.count;
+    const warning = (this.count / this.limit) >= this.warnThreshold;
+    return { warning, remaining };
+  }
+
   getState() {
     this.checkReset();
     return {
@@ -341,11 +380,15 @@ export class DualRateLimiter extends EventEmitter {
 
   /**
    * 核心请求入口 - 双重令牌校验 + FIFO 排队
+   * @param {Object} request
+   * @param {boolean} [request._skipMetrics] - 子限速器 acquire 时传入，
+   *   避免同一请求在子桶与主桶各向 metricsTracker 记录一次导致滑动窗口 RPM 翻倍。
    */
   async acquire(request) {
-    const { modelId, messages, max_tokens, isFreeModel, signal, _skipRateLimit, timeoutMs } = request;
+    const { modelId, messages, max_tokens, isFreeModel, signal, _skipRateLimit, timeoutMs, _skipMetrics } = request;
     
-    // _skipRateLimit: 用于 NVCF 轮询等特殊请求，跳过限速扣减但仍记录统计
+    // _skipRateLimit: 用于 NVCF 轮询等特殊请求，跳过限速扣减但不记录统计
+    // （规格书 §3：轮询请求不重复扣减 RPM/TPM）
     if (_skipRateLimit) {
       return { allowed: true, skipped: true };
     }
@@ -359,14 +402,16 @@ export class DualRateLimiter extends EventEmitter {
       return { allowed: true };
     }
     
-    // 1. 日配额熔断检查
-    const dailyCheck = this.dailyQuota.tryConsume();
+    // 1. 日配额熔断检查（只检查是否已耗尽，不推进计数；
+    // 计数由拦截器在响应成功后调用 dailyQuota.recordUsage() 推进，
+    // 避免 429/失败请求虚高 RPD 计数）
+    const dailyCheck = this.dailyQuota.checkDailyQuota();
     if (!dailyCheck.allowed) {
       throw new Error('ERR_RPD_EXCEEDED');
     }
     if (dailyCheck.warning) {
       this.emit('dailyQuotaWarning', { 
-        used: this.config.rpd - dailyCheck.remaining, 
+        used: this.dailyQuota.count, 
         limit: this.config.rpd 
       });
     }
@@ -378,7 +423,8 @@ export class DualRateLimiter extends EventEmitter {
     const subLimiter = await this.getSubLimiter(modelId);
     if (subLimiter) {
       // 双重校验：先通过子限速器，再通过主限速器
-      await subLimiter.acquire(request);
+      // 标记 _skipMetrics：子桶放行后不重复记录滑动窗口统计（由主限速器统一记录一次）
+      await subLimiter.acquire({ ...request, _skipMetrics: true });
     }
     
     // 4. FIFO 排队等待（免费模型优先级较低 = 数值较大）
@@ -392,7 +438,11 @@ export class DualRateLimiter extends EventEmitter {
     }
     
     // 记录滑动窗口统计（使用全局统一的 metricsTracker）
-    metricsTracker.recordRequest(this.providerId, estimatedTokens);
+    // 仅由调用链的顶层（主限速器）记录一次；子限速器以 _skipMetrics 调用时跳过，
+    // 避免同一请求在子桶与主桶各记一次导致 60s 窗口 RPM/TPM 翻倍
+    if (!_skipMetrics) {
+      metricsTracker.recordRequest(this.providerId, estimatedTokens);
+    }
     
     return { 
       allowed: true, 
@@ -479,20 +529,33 @@ export class DualRateLimiter extends EventEmitter {
 
   /**
    * 处理队列
-   * 使用短轮询间隔检查，支持取消/超时中断
+   * 真正的优先级调度：每轮取队列中优先级最高（数值最小）的一项处理；
+   * 高优先级请求入队后会"插队"到正在等待的低优先级请求前面，
+   * 等待中的低优先级请求不会独占调度循环，分段 sleep 唤醒后重新评估队首
    */
   async processQueue() {
     if (this.processing || this.queue.length === 0) return;
     
     this.processing = true;
     const POLL_INTERVAL = 100; // 100ms 轮询间隔，允许快速响应取消/超时
+    const TICK_INTERVAL = 20;   // 20ms 一次调度重评估，让新入队的高优先级请求尽快插队
     
     while (this.queue.length > 0) {
-      const item = this.queue[0];
+      // 按优先级 + 时间戳选出队首（高优先级先处理；同优先级 FIFO）
+      let headIndex = 0;
+      for (let i = 1; i < this.queue.length; i++) {
+        const a = this.queue[i];
+        const b = this.queue[headIndex];
+        if (a.priority < b.priority ||
+            (a.priority === b.priority && a.timestamp <= b.timestamp)) {
+          headIndex = i;
+        }
+      }
+      const item = this.queue[headIndex];
       
       // 检查当前项是否已被取消/超时（从队列移除）
       if (!this.queue.includes(item)) {
-        continue; // 已被移除，处理下一个
+        continue; // 已被移除，重新评估队首
       }
       
       // 计算等待时间
@@ -501,22 +564,23 @@ export class DualRateLimiter extends EventEmitter {
       const waitMs = Math.max(rpmWait, tpmWait);
       
       if (waitMs <= 0) {
-        // 可以立即放行
-        this.queue.shift();
+        // 可以立即放行：按当前位置移除队首（而非 shift，保持相对顺序）
+        this.queue.splice(headIndex, 1);
         if (item.timeoutId) clearTimeout(item.timeoutId);
         if (item.abortHandler && item.signal) {
           item.signal.removeEventListener('abort', item.abortHandler);
         }
         item.resolve({ waitTime: 0 });
       } else {
-        // 需要等待 - 分段等待，每 POLL_INTERVAL 检查一次
+        // 需要等待 - 分段等待，每 TICK_INTERVAL 重新评估一次调度
+        // （新入队的高优先级请求会在下个 tick 插队；当前项若被取消/超时则自动出列）
         let remainingMs = waitMs;
         while (remainingMs > 0 && this.queue.includes(item)) {
-          const sleepMs = Math.min(remainingMs, POLL_INTERVAL);
+          const sleepMs = Math.min(remainingMs, TICK_INTERVAL);
           await new Promise(r => setTimeout(r, sleepMs));
           remainingMs -= sleepMs;
         }
-        // 循环继续检查（如果项仍在队列中）
+        // 循环继续，重新选队首（item 可能已不再是队首或已被移除）
       }
     }
     
@@ -544,8 +608,15 @@ export class DualRateLimiter extends EventEmitter {
 
   /**
    * 429 惩罚 - 清空双桶
+   * @param {Object} options
+   * @param {string} options.modelId - 触发 429 的模型
+   * @param {boolean} [options.recordHistory=true] - 是否记录 429 历史。
+   *   调用方（requestInterceptor.handle429）若已在外部调用 historyTracker.record429，
+   *   应传 false 避免同一次 429 被重复写入历史、total429Count 翻倍。
    */
-  penalizeOn429(modelId, actualRpm, actualTpm) {
+  penalizeOn429(modelId, actualRpm, actualTpm, options = {}) {
+    const { recordHistory = true } = options;
+    
     // 记录滑动窗口瞬时统计（使用全局统一的 metricsTracker）
     const stats = metricsTracker.getCurrentStats(this.providerId);
     
@@ -559,8 +630,10 @@ export class DualRateLimiter extends EventEmitter {
       if (subLimiter.tpmBucket) subLimiter.tpmBucket.penalize();
     }
     
-    // 记录历史 - 委托给统一的 historyTracker
-    historyTracker.record429(this.providerId, stats.rpm, stats.tpm, modelId);
+    // 记录历史 - 委托给统一的 historyTracker（仅当调用方未自行记录时）
+    if (recordHistory) {
+      historyTracker.record429(this.providerId, stats.rpm, stats.tpm, modelId);
+    }
     
     this.emit('penalized', { providerId: this.providerId, modelId, actualRpm: stats.rpm, actualTpm: stats.tpm });
   }
@@ -581,12 +654,41 @@ export class DualRateLimiter extends EventEmitter {
 
   /**
    * 热更新配置（同时传播给子限速器）
+   * 注意：保留现有日配额计数与滑动窗口统计，避免保存设置一次就清零 RPD 计数，
+   * 导致 NVIDIA 日配额保护失效。
    */
   updateConfig(newConfig) {
     const oldConfig = { ...this.config };
     this.config = { ...this.config, ...newConfig };
-    this.initBuckets();
-    this.dailyQuota = new DailyQuotaBreaker(this.config.rpd, 0);
+    
+    // 令牌桶热更新：按容量比例保留当前水位，而非重建（重建会使初始突发 20% 规则生效，
+    // 把刚用掉的桶水位错误重置）
+    const rpmRefillRate = this.config.rpm / 60000;
+    const tpmRefillRate = this.config.tpm > 0 ? this.config.tpm / 60000 : 0;
+    
+    if (this.rpmBucket) {
+      this.rpmBucket.updateConfig(this.config.rpm, rpmRefillRate);
+    } else {
+      this.rpmBucket = new SmoothTokenBucket(this.config.rpm, rpmRefillRate);
+    }
+    
+    if (this.config.tpm > 0) {
+      if (this.tpmBucket) {
+        this.tpmBucket.updateConfig(this.config.tpm, tpmRefillRate);
+      } else {
+        this.tpmBucket = new SmoothTokenBucket(this.config.tpm, tpmRefillRate);
+      }
+    } else {
+      this.tpmBucket = null;
+    }
+    
+    // 日配额：limit 变化时同步上限，但保留已用计数（仅当 limit 变大或相等时保留；
+    // limit 变小且已用超出新上限时按新上限裁剪，避免负数 remaining）
+    if (this.config.rpd !== this.dailyQuota.limit) {
+      const used = Math.min(this.dailyQuota.count, this.config.rpd);
+      this.dailyQuota.limit = this.config.rpd;
+      this.dailyQuota.count = used;
+    }
     
     // 传播配置变更到子限速器
     for (const [modelId, subLimiter] of this.subLimiters) {

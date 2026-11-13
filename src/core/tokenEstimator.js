@@ -7,11 +7,10 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { ConfigPaths } from '../config/configPaths.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = join(__dirname, '..', 'config');
+// 校准文件路径统一走 ConfigPaths，与运行时配置目录（支持 DSH_SMART_RATELIMIT_CONFIG_DIR）保持一致
+const CALIBRATIONS_FILE = ConfigPaths.calibrations;
 
 /**
  * 预估策略类型
@@ -48,14 +47,14 @@ let MODEL_CALIBRATIONS = null;
 
 /**
  * 加载模型校准数据
+ * 路径使用 ConfigPaths.calibrations，支持环境变量覆盖配置目录
  */
 function loadModelCalibrations() {
   if (MODEL_CALIBRATIONS !== null) return MODEL_CALIBRATIONS;
   
   try {
-    const calibrationPath = join(CONFIG_DIR, 'model_token_calibrations.json');
-    if (existsSync(calibrationPath)) {
-      MODEL_CALIBRATIONS = JSON.parse(readFileSync(calibrationPath, 'utf-8'));
+    if (existsSync(CALIBRATIONS_FILE)) {
+      MODEL_CALIBRATIONS = JSON.parse(readFileSync(CALIBRATIONS_FILE, 'utf-8'));
     } else {
       MODEL_CALIBRATIONS = {};
     }

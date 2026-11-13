@@ -24,6 +24,46 @@ export class RequestInterceptor {
     this.manager = new RateLimiterManager();
     this.settings = this.loadSettings();
     this.initialized = false;
+    // Provider 级 429 冷却门：同一 provider 的并发 429 共享一次退避等待，
+    // 避免每个请求各自同步 sleep、互相阻塞调用栈
+    this._cooldowns = new Map(); // providerId -> Promise<{backoffMs}>
+  }
+
+  /**
+   * 获取/创建 provider 级冷却门
+   * 同一 provider 的并发 429 共享冷却等待（只挂一个退避 timer），
+   * 避免每个请求各自 sleep 阻塞调用栈；冷却期内新 429 按更大退避时间延长
+   * @param {string} providerId
+   * @param {number} backoffMs - 本次 429 计算出的退避时间
+   * @returns {Promise<number>} resolve 本次 backoffMs；冷却期内再次收到 429 时 reject（RATE_LIMIT_COOLDOWN）
+   */
+  _getCooldownGate(providerId, backoffMs) {
+    const existing = this._cooldowns.get(providerId);
+    
+    if (existing) {
+      // 冷却期内再次 429：按更大退避时间延长（max 策略，防高频 429 让冷却过早解除）
+      if (backoffMs > existing.backoffMs) {
+        existing.backoffMs = backoffMs;
+        clearTimeout(existing.timer);
+        existing.timer = setTimeout(existing.onEnd, backoffMs);
+      }
+      // 拒绝当前调用方：provider 仍在冷却中
+      return Promise.reject(new Error('RATE_LIMIT_COOLDOWN'));
+    }
+    
+    // 创建冷却门
+    let timer;
+    const gateState = { backoffMs, timer: null };
+    const promise = new Promise((resolve) => {
+      gateState.onEnd = () => {
+        this._cooldowns.delete(providerId);
+        resolve(gateState.backoffMs);
+      };
+      timer = setTimeout(gateState.onEnd, gateState.backoffMs);
+      gateState.timer = timer;
+    });
+    this._cooldowns.set(providerId, gateState);
+    return promise;
   }
 
   /**
@@ -84,21 +124,28 @@ export class RequestInterceptor {
 
     try {
       // 通过双重令牌桶获取许可
+      // 透传 _skipRateLimit / _isPolling 等标记：NVCF 轮询等请求应跳过 RPM/TPM 扣减
       const result = await limiter.acquire({
         modelId,
         messages,
         max_tokens,
         isFreeModel: request.isFreeModel,
-        signal: request.signal
+        signal: request.signal,
+        _skipRateLimit: request._skipRateLimit,
+        _isPolling: request._isPolling
       });
       
-      // 记录指标
-      metricsTracker.recordRequest(providerId, result.estimatedTokens);
+      // 记录指标（跳过的请求不重复统计，_skipRateLimit 请求已在 acquire 中标记 skipped）
+      if (!result.skipped) {
+        metricsTracker.recordRequest(providerId, result.estimatedTokens);
+      }
       
       return {
         ...request,
         _ratelimit: {
-          allowed: true,
+          allowed: result.allowed,
+          skipped: result.skipped || false,
+          bypassed: result.bypassed || false,
           estimatedTokens: result.estimatedTokens,
           limiter
         }
@@ -145,12 +192,20 @@ export class RequestInterceptor {
       const actualTokens = response.data.usage.total_tokens;
       limiter.settle(actualTokens, estimatedTokens);
     }
+    
+    // 请求成功（2xx）才推进日配额计数；429/失败请求不计入 RPD，
+    // 避免重试风暴虚高 NVIDIA 等提供商的日配额计数
+    if (response.status >= 200 && response.status < 300) {
+      limiter.dailyQuota.recordUsage();
+    }
 
     return response;
   }
 
   /**
    * 处理 429 错误
+   * 触发 provider 级冷却门：并发 429 共享一次退避等待，退避时长取最大值，
+   * 冷却期内后续请求统一进入排队（桶已被 penalizeOn429 清空），杜绝雪崩重试
    * @param {Object} limiter - 限速器实例
    * @param {string} providerId - 提供商 ID
    * @param {string} modelId - 模型 ID
@@ -161,8 +216,8 @@ export class RequestInterceptor {
     // 获取当前滑动窗口统计
     const stats = metricsTracker.getCurrentStats(providerId);
     
-    // 触发惩罚（清空双桶）
-    limiter.penalizeOn429(modelId, stats.rpm, stats.tpm);
+    // 触发惩罚（清空双桶），历史由下方 handle429 统一记录一次，避免重复
+    limiter.penalizeOn429(modelId, stats.rpm, stats.tpm, { recordHistory: false });
     
     // 记录历史并获取建议值
     const suggestion = historyTracker.record429(providerId, stats.rpm, stats.tpm, modelId);
@@ -170,8 +225,8 @@ export class RequestInterceptor {
     // 计算退避时间（传入重试次数用于指数退避）
     const backoffMs = this.calculateBackoff(limiter.config, response, retryCount);
     
-    // 等待退避时间
-    await new Promise(resolve => setTimeout(resolve, backoffMs));
+    // 等待 provider 级冷却门（并发 429 共享一次退避）
+    await this._getCooldownGate(providerId, backoffMs);
     
     return {
       backoffMs,
@@ -243,9 +298,11 @@ export class RequestInterceptor {
 
   /**
    * 保存用户设置
+   * 剥离 priority 等元数据字段，避免 UI 侧把生效来源标记写进配置数据
    */
   saveSettings(providerId, config) {
-    this.settings[providerId] = { ...this.settings[providerId], ...config, priority: 'user_custom' };
+    const { priority, ...data } = config || {};
+    this.settings[providerId] = { ...this.settings[providerId], ...data, priority: 'user_custom' };
     try {
       writeFileSync(SETTINGS_FILE, JSON.stringify(this.settings, null, 2));
     } catch (error) {

@@ -6,7 +6,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DualRateLimiter, SmoothTokenBucket, SlidingWindowTracker, DailyQuotaBreaker } from '../src/limiter/dualRateLimiter.js';
@@ -14,7 +14,26 @@ import { historyTracker } from '../src/history/metricsTracker.js';
 import { estimateTokens } from '../src/core/tokenEstimator.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const HISTORY_FILE = join(__dirname, '..', 'config', 'rate_limit_429_history.json');
+const PROJECT_CONFIG_DIR = join(__dirname, '..', 'config');
+
+// 测试隔离：把配置目录指向临时目录，避免测试污染仓库真实 config/ 文件
+// （penalizeOn429 / historyTracker 用例会写入 429 历史文件）
+const TEST_CONFIG_DIR = join(__dirname, '.test-config-tmp');
+process.env.DSH_SMART_RATELIMIT_CONFIG_DIR = TEST_CONFIG_DIR;
+mkdirSync(TEST_CONFIG_DIR, { recursive: true });
+// 复制只读的预设/探测文件供测试使用
+for (const f of ['default_presets.json', 'probed_model_limits.json']) {
+  const src = join(PROJECT_CONFIG_DIR, f);
+  if (existsSync(src)) copyFileSync(src, join(TEST_CONFIG_DIR, f));
+}
+// 历史文件在临时目录中初始为空对象
+writeFileSync(join(TEST_CONFIG_DIR, 'rate_limit_429_history.json'), '{}');
+const HISTORY_FILE = join(TEST_CONFIG_DIR, 'rate_limit_429_history.json');
+
+// 测试隔离验证：确保 historyTracker 实际指向临时目录（防止 ConfigPaths 缓存导致漏写真实 config）
+if (!HISTORY_FILE.includes('.test-config-tmp')) {
+  throw new Error(`测试隔离失败：HISTORY_FILE 指向了真实配置目录 ${HISTORY_FILE}`);
+}
 
 describe('SmoothTokenBucket', () => {
   it('初始令牌数为容量的 20%', () => {
@@ -203,8 +222,8 @@ describe('DualRateLimiter - 核心功能', () => {
       backoffStrategy: 'fixed',
       fixedBackoffSeconds: 15
     });
-    // Use up the quota
-    limiter.dailyQuota.tryConsume();
+    // Use up the quota（推进计数用 recordUsage，acquire 内部只做 checkDailyQuota 不推进）
+    limiter.dailyQuota.recordUsage();
     
     const request = {
       modelId: 'test-model',
@@ -247,14 +266,12 @@ describe('DualRateLimiter - 核心功能', () => {
   });
 
   it('penalizeOn429 清空双桶并记录历史', () => {
-    // 清理历史文件避免测试间干扰
-    if (existsSync(HISTORY_FILE)) {
-      writeFileSync(HISTORY_FILE, '{}');
-    }
-    // 清理内存中的历史缓存
-    historyTracker.clearHistory('test-provider');
+    // 使用独立的 provider 标识，避免与集成测试 / 真实数据冲突
+    const PROVIDER = 'unit-test-provider-' + Date.now();
+    // 清理该 provider 的历史缓存
+    historyTracker.clearHistory(PROVIDER);
     
-    const limiter = new DualRateLimiter('test-provider', {
+    const limiter = new DualRateLimiter(PROVIDER, {
       rpm: 60,
       tpm: 60000,
       rpd: 1000,
@@ -271,11 +288,35 @@ describe('DualRateLimiter - 核心功能', () => {
     assert.strictEqual(limiter.rpmBucket.tokens, 0);
     assert.strictEqual(limiter.tpmBucket.tokens, 0);
     
-    // 现在历史由统一的 historyTracker 管理
-    const suggestion = historyTracker.getSuggestion('test-provider');
+    // 默认 recordHistory=true，历史由统一的 historyTracker 管理（写入临时目录 HISTORY_FILE）
+    const suggestion = historyTracker.getSuggestion(PROVIDER);
     assert.ok(suggestion !== null);
     assert.strictEqual(suggestion.total429Count, 1);
     assert.ok(suggestion.suggestedSafeRpm > 0);
+    // 清理：避免污染临时目录后续用例
+    historyTracker.clearHistory(PROVIDER);
+  });
+
+  it('penalizeOn429 传入 recordHistory=false 时不重复记录历史', () => {
+    const PROVIDER = 'unit-test-provider-2-' + Date.now();
+    historyTracker.clearHistory(PROVIDER);
+    
+    const limiter = new DualRateLimiter(PROVIDER, {
+      rpm: 60,
+      tpm: 60000,
+      rpd: 1000,
+      enabled: true
+    });
+    
+    // 模拟 requestInterceptor.handle429 的调用方式：外部已自行 record429
+    limiter.penalizeOn429('test-model', 61, 61000, { recordHistory: false });
+    historyTracker.record429(PROVIDER, 61, 61000, 'test-model');
+    
+    const suggestion = historyTracker.getSuggestion(PROVIDER);
+    assert.ok(suggestion !== null);
+    // 仅一次 429 记录，total429Count 应为 1
+    assert.strictEqual(suggestion.total429Count, 1);
+    historyTracker.clearHistory(PROVIDER);
   });
 
   it('updateConfig 热更新生效', () => {
@@ -294,6 +335,46 @@ describe('DualRateLimiter - 核心功能', () => {
     assert.strictEqual(limiter.config.tpm, 120000);
     assert.strictEqual(limiter.rpmBucket.capacity, 120);
     assert.strictEqual(limiter.tpmBucket.capacity, 120000);
+  });
+
+  it('updateConfig 热更新保留日配额计数，不清零 RPD 保护', () => {
+    const limiter = new DualRateLimiter('test-provider-rpd', {
+      rpm: 60,
+      tpm: 60000,
+      rpd: 100,
+      enabled: true
+    });
+    
+    // 先消耗 5 次日配额
+    limiter.dailyQuota.tryConsume();
+    limiter.dailyQuota.tryConsume();
+    limiter.dailyQuota.tryConsume();
+    limiter.dailyQuota.tryConsume();
+    limiter.dailyQuota.tryConsume();
+    assert.strictEqual(limiter.dailyQuota.count, 5);
+    
+    // 热更新配置（模拟用户在 UI 保存设置触发 updateConfig）
+    limiter.updateConfig({ rpm: 120, tpm: 120000 });
+    
+    // 日配额计数应保留，不能清零
+    assert.strictEqual(limiter.dailyQuota.count, 5, '热更新后 RPD 计数应保留');
+    assert.strictEqual(limiter.dailyQuota.limit, 100, 'limit 未变时保持原值');
+  });
+
+  it('updateConfig 缩小 RPD 上限时按新上限裁剪计数', () => {
+    const limiter = new DualRateLimiter('test-provider-rpd2', {
+      rpm: 60,
+      tpm: 60000,
+      rpd: 100,
+      enabled: true
+    });
+    
+    for (let i = 0; i < 50; i++) limiter.dailyQuota.tryConsume();
+    
+    limiter.updateConfig({ rpd: 30 });
+    
+    assert.strictEqual(limiter.dailyQuota.limit, 30);
+    assert.strictEqual(limiter.dailyQuota.count, 30, '计数不应超过新上限');
   });
 
   it('getMonitorState 返回完整监控数据', () => {
