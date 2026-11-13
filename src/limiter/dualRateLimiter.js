@@ -270,6 +270,7 @@ export class DualRateLimiter extends EventEmitter {
       applyToFreeModelsOnly: config.applyToFreeModelsOnly !== false,
       backoffStrategy: config.backoffStrategy || 'auto',
       fixedBackoffSeconds: config.fixedBackoffSeconds || 60,
+      providerId,  // 供 calculateBackoff 使用
       ...config
     };
     

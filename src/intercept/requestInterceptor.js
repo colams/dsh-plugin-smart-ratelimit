@@ -247,7 +247,23 @@ export class RequestInterceptor {
       return parseInt(retryAfter) * 1000;
     }
     
-    switch (strategy) {
+    // 自动适配：根据 provider 选择最佳策略
+    let effectiveStrategy = strategy;
+    if (strategy === 'auto') {
+      const providerId = config.providerId || '';
+      if (providerId.startsWith('nvidia')) {
+        // NVIDIA 不返回 Retry-After，固定 15s 效果最好
+        effectiveStrategy = 'fixed';
+      } else if (providerId === 'agnes') {
+        // Agnes 推荐指数退避
+        effectiveStrategy = 'exponential';
+      } else {
+        // 其他提供商：默认指数退避，但优先读取 Retry-After（上面已处理）
+        effectiveStrategy = 'exponential';
+      }
+    }
+    
+    switch (effectiveStrategy) {
       case 'fixed':
         // 固定退避 + 抖动
         const baseMs = (config.fixedBackoffSeconds || 15) * 1000;
@@ -381,7 +397,11 @@ export class RequestInterceptor {
     const limiter = this.manager.getLimiter(providerId);
     if (!limiter) return null;
     
-    return limiter.getMonitorState();
+    const state = limiter.getMonitorState();
+    // 添加 RPD 告警状态
+    const dailyState = limiter.dailyQuota.getState();
+    state.dailyQuotaWarning = dailyState.warning;
+    return state;
   }
 
   /**
@@ -390,7 +410,10 @@ export class RequestInterceptor {
   getAllMonitorData() {
     const data = {};
     for (const limiter of this.manager.getAllLimiters()) {
-      data[limiter.providerId] = limiter.getMonitorState();
+      const state = limiter.getMonitorState();
+      const dailyState = limiter.dailyQuota.getState();
+      state.dailyQuotaWarning = dailyState.warning;
+      data[limiter.providerId] = state;
     }
     return data;
   }

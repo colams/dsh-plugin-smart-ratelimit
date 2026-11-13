@@ -4,13 +4,40 @@
  * 对应规格书 §2.1, §5.1
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { load } from 'js-yaml';
 import { ConfigPaths } from './configPaths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * 获取可能的 DSH 配置文件路径列表
+ * 优先级：环境变量 > 桌面端配置 > 兼容旧版路径
+ */
+function getCandidateConfigPaths() {
+  const paths = [];
+  const homeDir = process.env.HOME || process.env.USERPROFILE;
+  
+  // 1. 环境变量指定的路径（最高优先级）
+  if (process.env.DSH_CONFIG_PATH) {
+    paths.push(process.env.DSH_CONFIG_PATH);
+  }
+  
+  // 2. 标准桌面端配置
+  paths.push(join(homeDir, '.dsh', 'profiles', 'desktop', 'cordis.patch.yml'));
+  
+  // 3. 兼容：旧版配置路径
+  paths.push(join(homeDir, '.dsh', 'cordis.patch.yml'));
+  paths.push(join(homeDir, '.config', 'dsh', 'profiles', 'desktop', 'cordis.patch.yml'));
+  
+  // 4. Linux/macOS 标准配置目录
+  const xdgConfig = process.env.XDG_CONFIG_HOME || join(homeDir, '.config');
+  paths.push(join(xdgConfig, 'dsh', 'profiles', 'desktop', 'cordis.patch.yml'));
+  
+  return paths;
+}
 
 /**
  * 从 DSH 配置文件中解析所有已配置的 Provider
@@ -20,17 +47,30 @@ export async function discoverProviders() {
   const providers = [];
   
   try {
-    // 尝试读取 DSH 桌面端配置
-    const homeDir = process.env.HOME || process.env.USERPROFILE;
-    const cordisConfigPath = join(homeDir, '.dsh', 'profiles', 'desktop', 'cordis.patch.yml');
-    
+    // 尝试读取所有候选配置路径，取第一个存在的
+    const candidatePaths = getCandidateConfigPaths();
     let configContent = '';
-    try {
-      configContent = readFileSync(cordisConfigPath, 'utf-8');
-    } catch {
-      // 如果读取失败，返回默认预设中的 providers
+    let usedPath = null;
+    
+    for (const path of candidatePaths) {
+      if (existsSync(path)) {
+        try {
+          configContent = readFileSync(path, 'utf-8');
+          usedPath = path;
+          break;
+        } catch (e) {
+          // 读取失败，尝试下一个
+          continue;
+        }
+      }
+    }
+    
+    if (!configContent) {
+      console.log('[ProviderDiscovery] No config file found, using defaults');
       return getDefaultProviders();
     }
+    
+    console.log('[ProviderDiscovery] Using config:', usedPath);
     
     // 使用 js-yaml 正规解析 YAML
     const parsed = load(configContent);

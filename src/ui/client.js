@@ -263,6 +263,8 @@ window.__ModuleLoader__.load({
         priorityDesc: '用户自定义 > 历史校准 > 系统自动配置 > 默认预设 > 全局兜底。',
         historyTitle: '历史限流预警',
         historyBody: '曾在 {rpm} RPM / {tpm} TPM（模型 {model}）触发 429。建议安全上限 ≤ {safeRpm} RPM / {safeTpm} TPM。',
+        rpdWarningTitle: '日配额预警',
+        rpdWarningBody: '今日已用 {used} / {limit} 次（{percent}%），接近每日限额。建议检查配置或升级套餐。',
         applySuggestion: '一键应用建议值',
         applying: '应用中…',
         dismiss: '暂不调整',
@@ -345,6 +347,8 @@ window.__ModuleLoader__.load({
         priorityDesc: 'User custom > history calibrated > system auto > default preset > global fallback.',
         historyTitle: 'Rate-limit warning',
         historyBody: 'Hit 429 at {rpm} RPM / {tpm} TPM (model {model}). Suggested ceiling: {safeRpm} RPM / {safeTpm} TPM.',
+        rpdWarningTitle: 'Daily quota warning',
+        rpdWarningBody: 'Used {used} / {limit} requests today ({percent}%), approaching daily limit. Check config or upgrade plan.',
         applySuggestion: 'Apply suggested values',
         applying: 'Applying…',
         dismiss: 'Not now',
@@ -837,6 +841,22 @@ window.__ModuleLoader__.load({
           )
         : null
 
+      // RPD 告警横幅（95% 阈值）
+      const rpdBanner = monitor && monitor.dailyQuotaWarning && monitor.dailyLimit > 0
+        ? h('div', { className: 'rl-banner' },
+            h(WarnIcon, { className: 'rl-banner-icon' }),
+            h('div', { className: 'rl-banner-body' },
+              h('div', { className: 'rl-banner-title' }, dict.rpdWarningTitle),
+              h('div', { className: 'rl-banner-text' },
+                dict.rpdWarningBody
+                  .replace('{used}', String(monitor.dailyUsed))
+                  .replace('{limit}', String(monitor.dailyLimit))
+                  .replace('{percent}', Math.round((monitor.dailyUsed / monitor.dailyLimit) * 100)),
+              ),
+            ),
+          )
+        : null
+
       // 限速参数
       const limitRows = [
         h(Row, { key: 'rpm', title: dict.rpm, desc: dict.rpmDesc },
@@ -968,6 +988,7 @@ window.__ModuleLoader__.load({
         providerRow,
         addForm,
         banner,
+        rpdBanner,
         enabledRow,
         h('div', { className: 'rl-group-title' }, dict.sectionLimits),
         limitRows,
