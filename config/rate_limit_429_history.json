@@ -1,1 +1,71 @@
-{}
+{
+  "test-429-provider": {
+    "lastTriggeredAt": "2026-11-13T09:21:22.496Z",
+    "triggeredAtRpm": 2,
+    "triggeredAtTpm": 210,
+    "model": "test-model",
+    "suggestedSafeRpm": 1,
+    "suggestedSafeTpm": 189,
+    "total429Count": 2,
+    "records": [
+      {
+        "timestamp": "2026-11-13T09:21:22.496Z",
+        "rpm": 2,
+        "tpm": 210,
+        "model": "test-model"
+      },
+      {
+        "timestamp": "2026-11-13T09:21:22.496Z",
+        "rpm": 2,
+        "tpm": 210,
+        "model": "test-model"
+      }
+    ]
+  },
+  "history-test": {
+    "lastTriggeredAt": "2026-11-13T09:21:23.379Z",
+    "triggeredAtRpm": 25,
+    "triggeredAtTpm": 50000,
+    "model": "test-model",
+    "suggestedSafeRpm": 22,
+    "suggestedSafeTpm": 45000,
+    "total429Count": 1,
+    "records": [
+      {
+        "timestamp": "2026-11-13T09:21:23.379Z",
+        "rpm": 25,
+        "tpm": 50000,
+        "model": "test-model"
+      }
+    ]
+  },
+  "history-test-2": {
+    "lastTriggeredAt": "2026-11-13T09:21:23.379Z",
+    "triggeredAtRpm": 25,
+    "triggeredAtTpm": 50000,
+    "model": "model-c",
+    "suggestedSafeRpm": 18,
+    "suggestedSafeTpm": 36000,
+    "total429Count": 3,
+    "records": [
+      {
+        "timestamp": "2026-11-13T09:21:23.379Z",
+        "rpm": 30,
+        "tpm": 60000,
+        "model": "model-a"
+      },
+      {
+        "timestamp": "2026-11-13T09:21:23.379Z",
+        "rpm": 20,
+        "tpm": 40000,
+        "model": "model-b"
+      },
+      {
+        "timestamp": "2026-11-13T09:21:23.379Z",
+        "rpm": 25,
+        "tpm": 50000,
+        "model": "model-c"
+      }
+    ]
+  }
+}

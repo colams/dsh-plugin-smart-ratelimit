@@ -19,8 +19,8 @@ function getConfigDirSync() {
     return process.env.DSH_SMART_RATELIMIT_CONFIG_DIR;
   }
   
-  // 2. 插件目录下的 config（开发/默认）
-  const pluginConfigDir = join(__dirname, '..', 'config');
+  // 2. 插件目录下的 config（开发/默认） - 项目根目录的 config
+  const pluginConfigDir = join(__dirname, '..', '..', 'config');
   
   // 3. 用户数据目录（生产环境）
   const homeDir = process.env.HOME || process.env.USERPROFILE;
