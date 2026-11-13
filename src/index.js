@@ -4,18 +4,18 @@
  * 对应规格书 §5, §6, §7
  */
 
-import { RequestInterceptor, requestInterceptor } from './requestInterceptor.js';
-import { discoverProviders, getDefaultConfig, getAllDefaultPresets } from './providerDiscovery.js';
-import { DualRateLimiter, RateLimiterManager } from './dualRateLimiter.js';
-import { metricsTracker, historyTracker } from './metricsTracker.js';
-import { mergeProviderConfig, getConfigSourceDescription } from './configMerger.js';
+import { RequestInterceptor, requestInterceptor } from './intercept/requestInterceptor.js';
+import { discoverProviders, getDefaultConfig, getAllDefaultPresets } from './config/providerDiscovery.js';
+import { DualRateLimiter, RateLimiterManager } from './limiter/dualRateLimiter.js';
+import { metricsTracker, historyTracker } from './history/metricsTracker.js';
+import { mergeProviderConfig, getConfigSourceDescription } from './config/configMerger.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ConfigPaths } from './config/configPaths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = join(__dirname, '..', 'config');
-const SETTINGS_FILE = join(CONFIG_DIR, 'rate_limit_settings.json');
+const SETTINGS_FILE = ConfigPaths.settings;
 
 /**
  * 插件主类
@@ -32,7 +32,7 @@ export class SmartRateLimitPlugin {
    */
   async start() {
     // 确保配置目录存在
-    this.ensureConfigDir();
+    ConfigPaths.ensureDir();
     
     // 发现并初始化 Providers
     await this.initializeProviders();
@@ -48,15 +48,6 @@ export class SmartRateLimitPlugin {
     
     this.initialized = true;
     console.log('[SmartRateLimit] Plugin started successfully');
-  }
-
-  /**
-   * 确保配置目录存在
-   */
-  ensureConfigDir() {
-    if (!existsSync(CONFIG_DIR)) {
-      mkdirSync(CONFIG_DIR, { recursive: true });
-    }
   }
 
   /**

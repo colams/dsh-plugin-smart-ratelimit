@@ -8,9 +8,9 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { load } from 'js-yaml';
+import { ConfigPaths } from './configPaths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = join(__dirname, '..', 'config');
 
 /**
  * 从 DSH 配置文件中解析所有已配置的 Provider
@@ -135,8 +135,7 @@ function getDefaultProviders() {
  */
 function readDefaultPresets() {
   try {
-    const presetPath = join(CONFIG_DIR, 'default_presets.json');
-    const content = readFileSync(presetPath, 'utf-8');
+    const content = readFileSync(ConfigPaths.presets, 'utf-8');
     return JSON.parse(content);
   } catch {
     return {};

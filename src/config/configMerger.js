@@ -12,9 +12,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { load } from 'js-yaml';
+import { ConfigPaths } from './configPaths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = join(__dirname, '..', 'config');
 
 /**
  * 配置优先级常量（数值越大优先级越高）
@@ -49,9 +49,8 @@ export function getGlobalFallbackConfig() {
  */
 export function getDefaultPresetConfig(providerId) {
   try {
-    const presetPath = join(CONFIG_DIR, 'default_presets.json');
-    if (existsSync(presetPath)) {
-      const presets = JSON.parse(readFileSync(presetPath, 'utf-8'));
+    if (existsSync(ConfigPaths.presets)) {
+      const presets = JSON.parse(readFileSync(ConfigPaths.presets, 'utf-8'));
       const preset = presets[providerId.toLowerCase()] || presets.default;
       if (preset) {
         return {
@@ -109,9 +108,8 @@ export function getProbedAndHistoryConfig(providerId) {
   
   // 读取探测结果
   try {
-    const probedPath = join(CONFIG_DIR, 'probed_model_limits.json');
-    if (existsSync(probedPath)) {
-      const probedData = JSON.parse(readFileSync(probedPath, 'utf-8'));
+    if (existsSync(ConfigPaths.probed)) {
+      const probedData = JSON.parse(readFileSync(ConfigPaths.probed, 'utf-8'));
       const providerProbed = probedData[providerId.toLowerCase()];
       if (providerProbed) {
         // 取所有模型中最严格的限制作为主配置
@@ -135,9 +133,8 @@ export function getProbedAndHistoryConfig(providerId) {
   
   // 读取历史建议值（优先级更高，因为基于真实 429 触发点）
   try {
-    const historyPath = join(CONFIG_DIR, 'rate_limit_429_history.json');
-    if (existsSync(historyPath)) {
-      const historyData = JSON.parse(readFileSync(historyPath, 'utf-8'));
+    if (existsSync(ConfigPaths.history)) {
+      const historyData = JSON.parse(readFileSync(ConfigPaths.history, 'utf-8'));
       const providerHistory = historyData[providerId.toLowerCase()];
       if (providerHistory && providerHistory.suggestedSafeRpm) {
         result.rpm = providerHistory.suggestedSafeRpm;
@@ -159,9 +156,8 @@ export function getProbedAndHistoryConfig(providerId) {
  */
 export function getUserCustomConfig(providerId) {
   try {
-    const settingsPath = join(CONFIG_DIR, 'rate_limit_settings.json');
-    if (existsSync(settingsPath)) {
-      const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    if (existsSync(ConfigPaths.settings)) {
+      const settings = JSON.parse(readFileSync(ConfigPaths.settings, 'utf-8'));
       const config = settings[providerId.toLowerCase()];
       if (config) {
         return {

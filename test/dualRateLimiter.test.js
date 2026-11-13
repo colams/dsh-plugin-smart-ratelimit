@@ -9,9 +9,9 @@ import assert from 'node:assert/strict';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DualRateLimiter, SmoothTokenBucket, SlidingWindowTracker, DailyQuotaBreaker } from '../src/dualRateLimiter.js';
-import { historyTracker } from '../src/metricsTracker.js';
-import { estimateTokens } from '../src/tokenEstimator.js';
+import { DualRateLimiter, SmoothTokenBucket, SlidingWindowTracker, DailyQuotaBreaker } from '../src/limiter/dualRateLimiter.js';
+import { historyTracker } from '../src/history/metricsTracker.js';
+import { estimateTokens } from '../src/core/tokenEstimator.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HISTORY_FILE = join(__dirname, '..', 'config', 'rate_limit_429_history.json');

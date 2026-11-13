@@ -6,10 +6,10 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ConfigPaths } from '../config/configPaths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = join(__dirname, '..', 'config');
-const HISTORY_FILE = join(CONFIG_DIR, 'rate_limit_429_history.json');
+const HISTORY_FILE = ConfigPaths.history;
 
 /**
  * 滑动窗口指标追踪器

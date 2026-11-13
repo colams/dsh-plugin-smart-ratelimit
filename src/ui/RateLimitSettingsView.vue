@@ -313,7 +313,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, getCurrentInstance } from 'vue'
 
 // 响应式状态
 const providers = ref([])
@@ -543,31 +543,63 @@ function startMonitorPolling() {
   
   // 每 5 秒轮询一次监控数据
   monitorPollingInterval.value = setInterval(async () => {
-    if (selectedProviderId.value) {
+    if (selectedProviderId.value && rpcClient) {
       await loadMonitorData(selectedProviderId.value)
     }
   }, 5000)
 }
 
+function stopMonitorPolling() {
+  if (monitorPollingInterval.value) {
+    clearInterval(monitorPollingInterval.value)
+    monitorPollingInterval.value = null
+  }
+}
+
 const monitorPollingInterval = ref(null)
+
+// 获取 RPC 客户端（优先使用 inject，fallback 全局变量）
+function getRpcClient() {
+  // 尝试从 provide/inject 获取
+  if (typeof getCurrentInstance === 'function') {
+    const instance = getCurrentInstance()
+    if (instance?.provides?.['smart-ratelimit-rpc']) {
+      return instance.provides['smart-ratelimit-rpc']
+    }
+  }
+  // Fallback: 全局变量（兼容旧版本）
+  if (window.__DSH_SMART_RATELIMIT_RPC__) {
+    return window.__DSH_SMART_RATELIMIT_RPC__
+  }
+  if (window.dsh?.plugins?.['smart-ratelimit']?.rpc) {
+    return window.dsh.plugins['smart-ratelimit'].rpc
+  }
+  return null
+}
 
 // 生命周期
 onMounted(async () => {
-  // 从全局上下文获取 RPC 客户端
-  // 在 DSH 环境中，这通常通过 provide/inject 或全局变量注入
-  if (window.__DSH_SMART_RATELIMIT_RPC__) {
-    rpcClient = window.__DSH_SMART_RATELIMIT_RPC__
-  } else if (window.dsh?.plugins?.['smart-ratelimit']?.rpc) {
-    rpcClient = window.dsh.plugins['smart-ratelimit'].rpc
+  rpcClient = getRpcClient()
+  
+  if (!rpcClient) {
+    console.warn('[RateLimitSettings] RPC client not found, UI will be non-functional')
   }
   
   await loadProviders()
   
-  // 组件卸载时清理
-  return () => {
-    if (monitorPollingInterval.value) {
-      clearInterval(monitorPollingInterval.value)
-    }
+  // 启动监控轮询
+  startMonitorPolling()
+})
+
+// 组件卸载时清理
+onUnmounted(() => {
+  stopMonitorPolling()
+})
+
+// 监听 provider 变化重启轮询
+watch(selectedProviderId, (newVal) => {
+  if (newVal) {
+    startMonitorPolling()
   }
 })
 </script>

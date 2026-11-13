@@ -4,17 +4,17 @@
  * 对应规格书 §3, §4.2, §7
  */
 
-import { DualRateLimiter, RateLimiterManager } from './dualRateLimiter.js';
-import { metricsTracker, historyTracker } from './metricsTracker.js';
-import { mergeProviderConfig } from './configMerger.js';
+import { DualRateLimiter, RateLimiterManager } from '../limiter/dualRateLimiter.js';
+import { metricsTracker, historyTracker } from '../history/metricsTracker.js';
+import { mergeProviderConfig } from '../config/configMerger.js';
 import { nvcfPoller } from './nvcfPoller.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ConfigPaths } from '../config/configPaths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = join(__dirname, '..', 'config');
-const SETTINGS_FILE = join(CONFIG_DIR, 'rate_limit_settings.json');
+const SETTINGS_FILE = ConfigPaths.settings;
 
 /**
  * 请求拦截器主类

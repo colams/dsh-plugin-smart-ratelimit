@@ -8,11 +8,12 @@ import { EventEmitter } from 'node:events';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { historyTracker, metricsTracker } from './metricsTracker.js';
-import { estimateTokens } from './tokenEstimator.js';
+import { historyTracker, metricsTracker } from '../history/metricsTracker.js';
+import { estimateTokens } from '../core/tokenEstimator.js';
+import { ConfigPaths } from '../config/configPaths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = join(__dirname, '..', 'config');
+const CONFIG_DIR = ConfigPaths.dir;
 
 /**
  * 平滑令牌桶类
@@ -342,7 +343,7 @@ export class DualRateLimiter extends EventEmitter {
    * 核心请求入口 - 双重令牌校验 + FIFO 排队
    */
   async acquire(request) {
-    const { modelId, messages, max_tokens, isFreeModel, signal, _skipRateLimit } = request;
+    const { modelId, messages, max_tokens, isFreeModel, signal, _skipRateLimit, timeoutMs } = request;
     
     // _skipRateLimit: 用于 NVCF 轮询等特殊请求，跳过限速扣减但仍记录统计
     if (_skipRateLimit) {
@@ -382,7 +383,7 @@ export class DualRateLimiter extends EventEmitter {
     
     // 4. FIFO 排队等待（免费模型优先级较低 = 数值较大）
     const priority = isFreeModel ? 10 : 0;
-    await this.queueRequest(estimatedTokens, { priority, signal });
+    await this.queueRequest(estimatedTokens, { priority, signal, timeoutMs });
     
     // 5. 放行瞬间扣减
     this.rpmBucket.tryConsume(1);
@@ -478,14 +479,21 @@ export class DualRateLimiter extends EventEmitter {
 
   /**
    * 处理队列
+   * 使用短轮询间隔检查，支持取消/超时中断
    */
   async processQueue() {
     if (this.processing || this.queue.length === 0) return;
     
     this.processing = true;
+    const POLL_INTERVAL = 100; // 100ms 轮询间隔，允许快速响应取消/超时
     
     while (this.queue.length > 0) {
       const item = this.queue[0];
+      
+      // 检查当前项是否已被取消/超时（从队列移除）
+      if (!this.queue.includes(item)) {
+        continue; // 已被移除，处理下一个
+      }
       
       // 计算等待时间
       const rpmWait = this.rpmBucket.waitTimeFor(1);
@@ -501,9 +509,14 @@ export class DualRateLimiter extends EventEmitter {
         }
         item.resolve({ waitTime: 0 });
       } else {
-        // 需要等待
-        await new Promise(r => setTimeout(r, waitMs));
-        // 循环继续检查
+        // 需要等待 - 分段等待，每 POLL_INTERVAL 检查一次
+        let remainingMs = waitMs;
+        while (remainingMs > 0 && this.queue.includes(item)) {
+          const sleepMs = Math.min(remainingMs, POLL_INTERVAL);
+          await new Promise(r => setTimeout(r, sleepMs));
+          remainingMs -= sleepMs;
+        }
+        // 循环继续检查（如果项仍在队列中）
       }
     }
     
