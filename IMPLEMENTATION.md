@@ -105,6 +105,14 @@ const finalResponse = await ratelimit.release(request, response)
 
 **指标去重修复**：`metricsTracker.recordRequest()` 现在仅在 `DualRateLimiter.acquire()` 第 447 行调用一次。`RequestInterceptor.intercept()` 不再重复记录。子限速器通过 `_skipMetrics: true` 显式跳过记录，由主限速器统一聚合，消除了约 2× 的 RPM/TPM 数值放大问题。
 
+**探测系统集成**：`src/index.js` 新增 `startProbe(providerId, modelId, apiKey, options)` 与 `getProbeStatus(taskId)` RPC，内部复用 `probeModels.mjs` 的二分法 RPM 探测 + 线性 TPM 探测算法。面板通过模态表单收集参数，启动任务后 3 秒轮询进度，完成后结果写入 `probed_model_limits.json`，下次启动自动为该模型创建子限速器（`getSubLimiter` 判定更严格时）。
+
+**自动退避策略**：`RequestInterceptor.calculateBackoff()` 中 `strategy: 'auto'` 现在按 provider 智能选择：`nvidia*` → fixed 15s、agnes → exponential、其他 → exponential 并优先读取 `Retry-After` 头。
+
+**RPD 95% 告警**：`getMonitorData` 返回 `dailyQuotaWarning` 标记（来源 `DailyQuotaBreaker.warnThreshold=0.95`），面板 `rpdBanner` 横幅在用量 ≥ 95% 时自动显示，含当前用量/上限/百分比。
+
+**多配置文件合并发现**：`providerDiscovery.getCandidateConfigPaths()` 支持 `DSH_CONFIG_PATH="path1,path2"` 逗号分隔，遍历所有存在的文件按优先级合并，首次出现的 provider 胜出并标记 `sourceFile`，供 UI 展示来源。
+
 ## 核心流程
 
 ```text

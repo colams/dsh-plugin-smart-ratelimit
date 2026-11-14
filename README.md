@@ -72,7 +72,7 @@ pnpm install
 - **实时监控**：5 秒轮询，显示队列、RPM/TPM 进度条、日配额用量
 - **历史预警**：触发过 429 时显示横幅，一键应用建议值
 - **日配额预警**：RPD 用量 ≥ 95% 时显示横幅
-- **探测按钮**：占位，CLI 脚本 `scripts/probeModels.mjs` 已可用
+- **探测按钮**：模态表单输入 modelId/apiKey/baseUrl，异步任务轮询进度，结果自动生成子限速器
 - **清空历史**：清除该服务商的 429 记录
 - **恢复默认**：回退到内置预设
 - **新增/删除服务商**：手动管理自定义 provider
@@ -123,8 +123,10 @@ POST /api/dsh-plugin-smart-ratelimit/rpc
 
 ## 已知限制
 
-- 面板的探测按钮是占位（CLI 探测脚本 `scripts/probeModels.mjs` 已可用，待集成到面板）。
-- Provider 发现当前不支持多配置文件合并（单文件优先级）。
+暂无。前版遗留的两项限制均已解决：
+
+- ✅ 探测按钮：面板现提供模态表单输入 modelId/apiKey/baseUrl，异步任务轮询显示进度，结果自动写入 `probed_model_limits.json` 生成子限速器。
+- ✅ 多配置文件合并：`DSH_CONFIG_PATH` 支持逗号分隔多路径，按优先级合并所有存在的配置文件，并标记每个 provider 的 `sourceFile` 来源。
 
 更完整的说明见 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
 
