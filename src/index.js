@@ -16,6 +16,7 @@ import { ConfigPaths } from './config/configPaths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SETTINGS_FILE = ConfigPaths.settings;
+const CONFIG_DIR = ConfigPaths.dir;
 
 /** Base path of the RPC route the Web UI panel talks to. */
 const RPC_BASE_PATH = '/api/dsh-plugin-smart-ratelimit/rpc';
@@ -54,6 +55,9 @@ export class SmartRateLimitPlugin {
     // 未在 inject 中声明的属性既不能读也不能写。
     this.providers = [];
     this.providerConfigs = {};
+    // 探测任务管理：taskId -> { providerId, modelId, status, progress, result, error, startedAt }
+    this.probeTasks = new Map();
+    this._probeTaskCounter = 0;
   }
 
   /**
@@ -252,7 +256,8 @@ export class SmartRateLimitPlugin {
       clearHistory: (providerId) => this.clearHistory(providerId),
       getMonitorData: (providerId) => this.getMonitorData(providerId),
       getHistory: (providerId) => this.getHistory(providerId),
-      runProbe: (providerId) => this.runProbe(providerId),
+      startProbe: (providerId, modelId, apiKey, options) => this.startProbe(providerId, modelId, apiKey, options),
+      getProbeStatus: (taskId) => this.getProbeStatus(taskId),
       addProvider: (payload) => this.addProvider(payload),
       removeProvider: (providerId) => this.removeProvider(providerId)
     };
@@ -542,16 +547,305 @@ export class SmartRateLimitPlugin {
   }
 
   /**
-   * 运行模型探测
+   * 运行模型探测（旧接口，保留兼容）
    */
   async runProbe(providerId) {
-    // 这里可以集成 probeModels 脚本
-    // 暂时返回模拟结果
     return {
       success: true,
-      message: 'Probe functionality to be implemented',
+      message: 'Use startProbe with modelId and apiKey for actual probing',
       providerId
     };
+  }
+
+  /**
+   * 启动异步探测任务
+   * @param {string} providerId
+   * @param {string} modelId
+   * @param {string} apiKey
+   * @param {Object} options - { maxRpm, step, timeout, baseUrl }
+   * @returns {Object} { taskId }
+   */
+  async startProbe(providerId, modelId, apiKey, options = {}) {
+    if (!providerId || !modelId || !apiKey) {
+      return { success: false, error: 'providerId, modelId, apiKey 均为必填' };
+    }
+
+    const taskId = `probe_${Date.now()}_${++this._probeTaskCounter}`;
+    const task = {
+      taskId,
+      providerId,
+      modelId,
+      apiKey,
+      options: {
+        maxRpm: options.maxRpm || 100,
+        step: options.step || 5,
+        timeout: options.timeout || 30000,
+        baseUrl: options.baseUrl || ''
+      },
+      status: 'pending',
+      progress: 0,
+      stage: 'init', // init, rpm, tpm, saving, done
+      result: null,
+      error: null,
+      startedAt: new Date().toISOString()
+    };
+
+    this.probeTasks.set(taskId, task);
+
+    // 异步执行探测，不阻塞返回
+    this._executeProbe(taskId).catch(err => {
+      console.error('[SmartRateLimit] Probe task failed:', err);
+      const t = this.probeTasks.get(taskId);
+      if (t) {
+        t.status = 'failed';
+        t.error = err.message;
+        t.progress = 100;
+      }
+    });
+
+    return { success: true, taskId };
+  }
+
+  /**
+   * 获取探测任务状态
+   */
+  getProbeStatus(taskId) {
+    const task = this.probeTasks.get(taskId);
+    if (!task) {
+      return { success: false, error: '任务不存在' };
+    }
+    return { success: true, task: { ...task, apiKey: '***' } };
+  }
+
+  /**
+   * 内部：执行探测逻辑（复用 probeModels.mjs 的核心算法）
+   */
+  async _executeProbe(taskId) {
+    const task = this.probeTasks.get(taskId);
+    if (!task) return;
+
+    const { providerId, modelId, apiKey, options } = task;
+
+    // 确定 baseUrl
+    let baseUrl = options.baseUrl;
+    if (!baseUrl) {
+      const defaultConfig = getDefaultConfig(providerId);
+      baseUrl = defaultConfig?.baseUrl || '';
+    }
+    if (!baseUrl) {
+      task.status = 'failed';
+      task.error = `无法确定 ${providerId} 的 API 基础 URL，请在选项中指定 baseUrl`;
+      return;
+    }
+
+    try {
+      // 阶段 1：探测 RPM
+      task.stage = 'rpm';
+      task.progress = 10;
+      const rpmResult = await this._probeMaxRpm(baseUrl, apiKey, modelId, options, (p) => {
+        task.progress = 10 + Math.floor(p * 0.4); // 10-50%
+      });
+
+      // 阶段 2：探测 TPM
+      task.stage = 'tpm';
+      task.progress = 50;
+      const tpmResult = await this._probeTpm(baseUrl, apiKey, modelId, rpmResult.rpm, options, (p) => {
+        task.progress = 50 + Math.floor(p * 0.4); // 50-90%
+      });
+
+      // 阶段 3：保存结果
+      task.stage = 'saving';
+      task.progress = 90;
+      const results = {
+        ...rpmResult,
+        ...tpmResult,
+        tpmConfidence: tpmResult.confidence
+      };
+
+      this._saveProbedResults(providerId, modelId, results);
+
+      task.status = 'done';
+      task.progress = 100;
+      task.stage = 'done';
+      task.result = results;
+      task.completedAt = new Date().toISOString();
+
+    } catch (error) {
+      task.status = 'failed';
+      task.error = error.message;
+      task.progress = 100;
+    }
+  }
+
+  /**
+   * 二分法探测最大 RPM（内部实现）
+   */
+  async _probeMaxRpm(baseUrl, apiKey, model, options, onProgress) {
+    const { maxRpm, step, timeout } = options;
+    let low = step;
+    let high = maxRpm;
+    let lastSuccessRpm = 0;
+    let last429Rpm = null;
+    let consecutive429 = 0;
+    let iteration = 0;
+    const maxIterations = Math.ceil(Math.log2(maxRpm / step)) + 2;
+
+    while (low <= high && iteration < maxIterations) {
+      iteration++;
+      const mid = Math.floor((low + high) / 2);
+      const testRpm = Math.max(step, Math.floor(mid / step) * step);
+
+      if (onProgress) onProgress(iteration / maxIterations);
+
+      const intervalMs = 60000 / testRpm;
+      const requestCount = Math.min(10, testRpm);
+
+      let successCount = 0;
+      let error429Count = 0;
+
+      const promises = [];
+      for (let i = 0; i < requestCount; i++) {
+        const delay = i * intervalMs;
+        promises.push(
+          new Promise(resolve => setTimeout(() => resolve(this._sendTestRequest(baseUrl, apiKey, model, 16, timeout)), delay))
+        );
+      }
+
+      const results = await Promise.all(promises);
+
+      for (const result of results) {
+        if (result.status === 200) successCount++;
+        else if (result.status === 429) error429Count++;
+      }
+
+      if (error429Count > 0) {
+        high = testRpm - step;
+        consecutive429++;
+        if (consecutive429 >= 2) break;
+      } else if (successCount >= requestCount * 0.8) {
+        lastSuccessRpm = testRpm;
+        low = testRpm + step;
+        consecutive429 = 0;
+      } else {
+        high = testRpm - step;
+      }
+    }
+
+    const safeRpm = last429Rpm ? Math.max(1, Math.floor(last429Rpm * 0.9)) : lastSuccessRpm;
+
+    return {
+      rpm: safeRpm,
+      triggeredAtRpm: last429Rpm,
+      lastSuccessRpm,
+      confidence: last429Rpm ? 0.8 : 0.5
+    };
+  }
+
+  /**
+   * 探测 TPM 限制（内部实现）
+   */
+  async _probeTpm(baseUrl, apiKey, model, safeRpm, options, onProgress) {
+    const { timeout } = options;
+    const testTokens = [1000, 4000, 8000, 16000, 32000, 64000, 100000];
+    let maxSafeTpm = 0;
+    let triggeredAtTpm = null;
+
+    for (let i = 0; i < testTokens.length; i++) {
+      const tokens = testTokens[i];
+      if (onProgress) onProgress(i / testTokens.length);
+
+      const result = await this._sendTestRequest(baseUrl, apiKey, model, tokens, timeout);
+
+      if (result.status === 200) {
+        const actualTokens = result.data?.usage?.total_tokens || tokens;
+        maxSafeTpm = Math.max(maxSafeTpm, actualTokens * safeRpm);
+      } else if (result.status === 429) {
+        triggeredAtTpm = tokens * safeRpm;
+        break;
+      }
+
+      // 避免触发限速，等待一下
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    const safeTpm = triggeredAtTpm ? Math.max(1, Math.floor(triggeredAtTpm * 0.9)) : maxSafeTpm;
+
+    return {
+      tpm: safeTpm,
+      triggeredAtTpm,
+      confidence: triggeredAtTpm ? 0.8 : 0.5
+    };
+  }
+
+  /**
+   * 发送测试请求
+   */
+  async _sendTestRequest(baseUrl, apiKey, model, maxTokens, timeout) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'Hi' }],
+          max_tokens: maxTokens,
+          temperature: 0
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      const data = await response.json().catch(() => ({}));
+
+      return {
+        status: response.status,
+        headers: Object.fromEntries(response.headers.entries()),
+        data,
+        error: null
+      };
+    } catch (error) {
+      clearTimeout(timeoutId);
+      return {
+        status: 0,
+        headers: {},
+        data: null,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * 保存探测结果到 probed_model_limits.json
+   */
+  _saveProbedResults(providerId, modelId, results) {
+    const PROBED_FILE = join(CONFIG_DIR, 'probed_model_limits.json');
+    let probedData = {};
+    if (existsSync(PROBED_FILE)) {
+      probedData = JSON.parse(readFileSync(PROBED_FILE, 'utf-8'));
+    }
+
+    if (!probedData[providerId]) {
+      probedData[providerId] = {};
+    }
+
+    probedData[providerId][modelId] = {
+      rpm: results.rpm,
+      tpm: results.tpm || 0,
+      probedAt: new Date().toISOString(),
+      probedRpm: results.triggeredAtRpm || null,
+      probedTpm: results.triggeredAtTpm || null,
+      confidence: Math.min(results.confidence || 0.5, results.tpmConfidence || 0.5)
+    };
+
+    writeFileSync(PROBED_FILE, JSON.stringify(probedData, null, 2));
+    console.log(`[SmartRateLimit] Probe results saved for ${providerId}/${modelId}`);
   }
 }
 

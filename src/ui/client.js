@@ -210,6 +210,55 @@ window.__ModuleLoader__.load({
   .rl-monitor-bar { background: #3a3a40; }
   .rl-footer, .rl-monitor { border-color: #33333a; }
   .rl-badge { background: #3a3a40; color: #b8b8be; }
+
+  /* 探测模态框 */
+  .rl-probe-modal-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.45); z-index: 1000;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    animation: rl-fade-in 0.15s ease;
+  }
+  .rl-probe-modal {
+    background: #fff; border-radius: 16px; width: 100%; max-width: 440px;
+    box-shadow: 0 24px 48px rgba(0,0,0,0.18);
+    animation: rl-slide-up 0.2s ease;
+    overflow: hidden;
+  }
+  @keyframes rl-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes rl-slide-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+  .rl-probe-modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid #f0f0f0;
+    font-size: 16px; font-weight: 500; color: #1a1a2e;
+  }
+  .rl-probe-close {
+    width: 28px; height: 28px; border: none; background: transparent;
+    font-size: 20px; line-height: 1; color: #9a9a9a; cursor: pointer; border-radius: 6px;
+  }
+  .rl-probe-close:hover { background: #f0f0f0; color: #1a1a2e; }
+  .rl-probe-modal-body { padding: 20px; }
+  .rl-probe-form { display: flex; flex-direction: column; gap: 16px; }
+  .rl-probe-field { display: flex; flex-direction: column; gap: 6px; }
+  .rl-probe-field label { font-size: 13px; font-weight: 500; color: #1a1a2e; }
+  .rl-probe-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+  .rl-probe-progress { display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center; }
+  .rl-probe-stage { font-size: 14px; color: #4a7dff; font-weight: 500; min-height: 20px; }
+  .rl-probe-bar { width: 100%; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; }
+  .rl-probe-fill { height: 100%; background: linear-gradient(90deg, #4a7dff, #7aa2ff); border-radius: 4px; transition: width 0.3s ease; }
+  .rl-probe-percent { font-size: 13px; color: #9a9a9a; font-variant-numeric: tabular-nums; }
+  .rl-probe-result { background: #eefaf1; border: 1px solid #c6f0d3; border-radius: 10px; padding: 12px; text-align: left; color: #1e7a3c; font-size: 13px; line-height: 1.8; }
+  .rl-probe-error { background: #fff2f1; border: 1px solid #ffd6d3; border-radius: 10px; padding: 12px; color: #c0392b; font-size: 13px; }
+  .rl-probe-actions { display: flex; justify-content: center; gap: 10px; margin-top: 8px; }
+
+  @media (prefers-color-scheme: dark) {
+    .rl-probe-modal { background: #232327; }
+    .rl-probe-modal-header { border-color: #33333a; color: #e8e8ea; }
+    .rl-probe-close { color: #9a9aa0; }
+    .rl-probe-close:hover { background: #3a3a40; color: #e8e8ea; }
+    .rl-probe-field label { color: #e8e8ea; }
+    .rl-probe-result { background: #1a2e22; border-color: #2d5a3d; color: #8fd6a6; }
+    .rl-probe-error { background: #2e1a1a; border-color: #5a2d2d; color: #f0a0a0; }
+  }
 }
 `
 
@@ -280,6 +329,20 @@ window.__ModuleLoader__.load({
         clearing: '清空中…',
         probe: '探测模型阈值',
         probing: '探测中…',
+        probeTitle: '探测模型阈值',
+        probeModelLabel: '模型 ID',
+        probeModelPlaceholder: '例如: nvidia/nemotron-3-ultra-550b-a55b',
+        probeApiKeyLabel: 'API Key',
+        probeApiKeyPlaceholder: 'sk-xxx...',
+        probeBaseUrlLabel: 'API Base URL (可选)',
+        probeStart: '开始探测',
+        probeStage_init: '初始化...',
+        probeStage_rpm: '探测 RPM 中...',
+        probeStage_tpm: '探测 TPM 中...',
+        probeStage_saving: '保存结果...',
+        probeResultRpm: '建议 RPM',
+        probeResultTpm: '建议 TPM',
+        probeResultConfidence: '置信度',
         saved: '设置已保存并立即生效',
         resetDone: '已恢复默认预设',
         suggestionApplied: '已应用历史建议值',
@@ -298,6 +361,8 @@ window.__ModuleLoader__.load({
         prioritySystem: '系统自动',
         priorityDefault: '默认预设',
         priorityFallback: '全局兜底',
+        close: '关闭',
+        cancel: '取消',
       },
       en: {
         nav: 'Rate Settings',
@@ -364,6 +429,20 @@ window.__ModuleLoader__.load({
         clearing: 'Clearing…',
         probe: 'Probe thresholds',
         probing: 'Probing…',
+        probeTitle: 'Probe Model Thresholds',
+        probeModelLabel: 'Model ID',
+        probeModelPlaceholder: 'e.g., nvidia/nemotron-3-ultra-550b-a55b',
+        probeApiKeyLabel: 'API Key',
+        probeApiKeyPlaceholder: 'sk-xxx...',
+        probeBaseUrlLabel: 'API Base URL (optional)',
+        probeStart: 'Start Probe',
+        probeStage_init: 'Initializing...',
+        probeStage_rpm: 'Probing RPM...',
+        probeStage_tpm: 'Probing TPM...',
+        probeStage_saving: 'Saving results...',
+        probeResultRpm: 'Suggested RPM',
+        probeResultTpm: 'Suggested TPM',
+        probeResultConfidence: 'Confidence',
         saved: 'Settings saved and applied',
         resetDone: 'Defaults restored',
         suggestionApplied: 'Suggested values applied',
@@ -382,6 +461,8 @@ window.__ModuleLoader__.load({
         prioritySystem: 'System auto',
         priorityDefault: 'Default preset',
         priorityFallback: 'Global fallback',
+        close: 'Close',
+        cancel: 'Cancel',
       },
     }
 
@@ -531,6 +612,13 @@ window.__ModuleLoader__.load({
       const [adding, setAdding] = useState(false)
       const [newId, setNewId] = useState('')
       const [newName, setNewName] = useState('')
+      // 探测相关状态
+      const [probeFormOpen, setProbeFormOpen] = useState(false)
+      const [probeModelId, setProbeModelId] = useState('')
+      const [probeApiKey, setProbeApiKey] = useState('')
+      const [probeBaseUrl, setProbeBaseUrl] = useState('')
+      const [probeTaskId, setProbeTaskId] = useState(null)
+      const [probeTask, setProbeTask] = useState(null)
 
       const showStatus = useCallback((message, kind) => {
         setStatus({ message, kind: kind || 'info' })
@@ -693,15 +781,73 @@ window.__ModuleLoader__.load({
         })
       }, [providerId, call, dict, showStatus])
 
-      const runProbe = useCallback(() => {
+      // 打开探测表单
+      const openProbeForm = useCallback(() => {
         if (!providerId) return
+        setProbeModelId('')
+        setProbeApiKey('')
+        setProbeBaseUrl('')
+        setProbeTaskId(null)
+        setProbeTask(null)
+        setProbeFormOpen(true)
+      }, [providerId])
+
+      // 关闭探测表单
+      const closeProbeForm = useCallback(() => {
+        setProbeFormOpen(false)
+        setProbeTaskId(null)
+        setProbeTask(null)
+      }, [])
+
+      // 启动探测任务
+      const startProbeTask = useCallback(() => {
+        if (!providerId || !probeModelId.trim() || !probeApiKey.trim()) {
+          showStatus('providerId, modelId, apiKey 均为必填', 'error')
+          return
+        }
         setBusy('probe')
-        call('runProbe', providerId).then((result) => {
+        call('startProbe', providerId, probeModelId.trim(), probeApiKey.trim(), {
+          baseUrl: probeBaseUrl.trim() || undefined,
+          maxRpm: 100,
+          step: 5,
+          timeout: 30000
+        }).then((result) => {
           setBusy('')
-          if (result.ok) showStatus(dict.probeStarted, 'info')
-          else showStatus(dict.probeFailed + '：' + result.error, 'error')
+          if (result.ok && result.value?.taskId) {
+            setProbeTaskId(result.value.taskId)
+            showStatus(dict.probeStarted, 'info')
+            // 开始轮询任务状态
+            pollProbeStatus(result.value.taskId)
+          } else {
+            showStatus(dict.probeFailed + '：' + (result.error || 'unknown'), 'error')
+          }
         })
-      }, [providerId, call, dict, showStatus])
+      }, [providerId, probeModelId, probeApiKey, probeBaseUrl, call, dict, showStatus])
+
+      // 轮询探测任务状态
+      const pollProbeStatus = useCallback((taskId) => {
+        const poll = () => {
+          call('getProbeStatus', taskId).then((result) => {
+            if (result.ok && result.value?.task) {
+              const task = result.value.task
+              setProbeTask(task)
+              if (task.status === 'pending' || task.status === 'running') {
+                // 继续轮询
+                window.setTimeout(poll, 3000)
+              } else if (task.status === 'done') {
+                showStatus('探测完成: RPM=' + task.result.rpm + ', TPM=' + task.result.tpm, 'success')
+                // 刷新设置以显示新的历史建议
+                loadSettings(providerId)
+              } else if (task.status === 'failed') {
+                showStatus(dict.probeFailed + '：' + task.error, 'error')
+              }
+            } else {
+              showStatus(dict.probeFailed + '：' + (result.error || '获取状态失败'), 'error')
+            }
+          })
+        }
+        poll()
+      }, [call, dict, providerId, loadSettings, showStatus])
 
       /** 新增自定义 provider。 */
       const submitAdd = useCallback(() => {
@@ -972,7 +1118,7 @@ window.__ModuleLoader__.load({
         }, busy === 'clear' ? dict.clearing : dict.clear),
         h('button', {
           type: 'button', className: 'rl-btn',
-          disabled: busy === 'probe' || !providerId, onClick: runProbe,
+          disabled: busy === 'probe' || !providerId, onClick: openProbeForm,
         }, busy === 'probe' ? dict.probing : dict.probe),
         h('button', {
           type: 'button', className: 'rl-btn',
@@ -983,6 +1129,88 @@ window.__ModuleLoader__.load({
           disabled: busy === 'save' || !providerId, onClick: save,
         }, busy === 'save' ? dict.saving : dict.save),
       )
+
+      // 探测表单模态框
+      const probeForm = probeFormOpen
+        ? h('div', { className: 'rl-probe-modal-overlay', onClick: closeProbeForm },
+            h('div', { className: 'rl-probe-modal', onClick: (e) => e.stopPropagation() },
+              h('div', { className: 'rl-probe-modal-header' },
+                h('h3', null, dict.probeTitle || '探测模型阈值'),
+                h('button', { type: 'button', className: 'rl-probe-close', onClick: closeProbeForm }, '×')
+              ),
+              h('div', { className: 'rl-probe-modal-body' },
+                !probeTaskId
+                  ? h('div', { className: 'rl-probe-form' },
+                      h('div', { className: 'rl-probe-field' },
+                        h('label', null, dict.probeModelLabel || '模型 ID'),
+                        h('input', {
+                          type: 'text',
+                          className: 'rl-input',
+                          placeholder: dict.probeModelPlaceholder || '例如: nvidia/nemotron-3-ultra-550b-a55b',
+                          value: probeModelId,
+                          onChange: (e) => setProbeModelId(e.target.value),
+                          autoFocus: true
+                        })
+                      ),
+                      h('div', { className: 'rl-probe-field' },
+                        h('label', null, dict.probeApiKeyLabel || 'API Key'),
+                        h('input', {
+                          type: 'password',
+                          className: 'rl-input',
+                          placeholder: dict.probeApiKeyPlaceholder || 'sk-xxx...',
+                          value: probeApiKey,
+                          onChange: (e) => setProbeApiKey(e.target.value)
+                        })
+                      ),
+                      h('div', { className: 'rl-probe-field' },
+                        h('label', null, dict.probeBaseUrlLabel || 'API Base URL (可选)'),
+                        h('input', {
+                          type: 'text',
+                          className: 'rl-input',
+                          placeholder: 'https://api.example.com/v1',
+                          value: probeBaseUrl,
+                          onChange: (e) => setProbeBaseUrl(e.target.value)
+                        })
+                      ),
+                      h('div', { className: 'rl-probe-actions' },
+                        h('button', {
+                          type: 'button', className: 'rl-btn',
+                          onClick: closeProbeForm
+                        }, dict.cancel),
+                        h('button', {
+                          type: 'button', className: 'rl-btn', 'data-variant': 'primary',
+                          disabled: busy === 'probe' || !probeModelId.trim() || !probeApiKey.trim(),
+                          onClick: startProbeTask
+                        }, busy === 'probe' ? dict.probing : (dict.probeStart || '开始探测'))
+                      )
+                    )
+                  : h('div', { className: 'rl-probe-progress' },
+                      h('div', { className: 'rl-probe-stage' }, dict['probeStage_' + probeTask?.stage] || probeTask?.stage || '进行中...'),
+                      h('div', { className: 'rl-probe-bar' },
+                        h('div', { className: 'rl-probe-fill', style: { width: (probeTask?.progress || 0) + '%' } })
+                      ),
+                      h('div', { className: 'rl-probe-percent' }, (probeTask?.progress || 0) + '%'),
+                      probeTask?.status === 'done' && probeTask?.result
+                        ? h('div', { className: 'rl-probe-result' },
+                            h('div', null, dict.probeResultRpm + ': ' + probeTask.result.rpm),
+                            h('div', null, dict.probeResultTpm + ': ' + probeTask.result.tpm),
+                            h('div', null, dict.probeResultConfidence + ': ' + Math.round((probeTask.result.confidence || 0) * 100) + '%')
+                          )
+                        : null,
+                      probeTask?.status === 'failed'
+                        ? h('div', { className: 'rl-probe-error' }, dict.probeFailed + ': ' + (probeTask?.error || '未知错误'))
+                        : null,
+                      h('div', { className: 'rl-probe-actions' },
+                        h('button', {
+                          type: 'button', className: 'rl-btn',
+                          onClick: closeProbeForm
+                        }, dict.close || '关闭')
+                      )
+                    )
+              )
+            )
+          )
+        : null
 
       return h('div', { className: 'rate-limit-settings-view' },
         providerRow,
@@ -1002,6 +1230,7 @@ window.__ModuleLoader__.load({
         status
           ? h('div', { className: 'rl-status', 'data-kind': status.kind }, status.message)
           : null,
+        probeForm
       )
     }
 

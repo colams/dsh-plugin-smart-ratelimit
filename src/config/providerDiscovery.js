@@ -14,15 +14,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * 获取可能的 DSH 配置文件路径列表
- * 优先级：环境变量 > 桌面端配置 > 兼容旧版路径
+ * 优先级：环境变量（支持逗号分隔多路径）> 桌面端配置 > 兼容旧版路径
+ * 返回数组，按优先级排序（越前越高）
  */
 function getCandidateConfigPaths() {
   const paths = [];
   const homeDir = process.env.HOME || process.env.USERPROFILE;
   
-  // 1. 环境变量指定的路径（最高优先级）
+  // 1. 环境变量指定的路径（最高优先级），支持逗号分隔多路径
   if (process.env.DSH_CONFIG_PATH) {
-    paths.push(process.env.DSH_CONFIG_PATH);
+    const envPaths = process.env.DSH_CONFIG_PATH.split(',').map(p => p.trim()).filter(Boolean);
+    paths.push(...envPaths);
   }
   
   // 2. 标准桌面端配置
@@ -41,64 +43,67 @@ function getCandidateConfigPaths() {
 
 /**
  * 从 DSH 配置文件中解析所有已配置的 Provider
- * @returns {Promise<Array<{id: string, displayName: string, baseUrl: string}>>}
+ * 遍历所有存在的配置文件（按优先级），合并 provider 列表
+ * 同一 providerId 以首次出现（优先级最高的文件）为准，标记来源文件
+ * @returns {Promise<Array<{id: string, displayName: string, baseUrl: string, sourceFile?: string}>>}
  */
 export async function discoverProviders() {
   const providers = [];
+  const seen = new Set(); // 已见过的 providerId，用于去重
   
   try {
-    // 尝试读取所有候选配置路径，取第一个存在的
+    // 获取所有候选路径，筛选存在的文件
     const candidatePaths = getCandidateConfigPaths();
-    let configContent = '';
-    let usedPath = null;
+    const existingPaths = candidatePaths.filter(p => existsSync(p));
     
-    for (const path of candidatePaths) {
-      if (existsSync(path)) {
-        try {
-          configContent = readFileSync(path, 'utf-8');
-          usedPath = path;
-          break;
-        } catch (e) {
-          // 读取失败，尝试下一个
-          continue;
-        }
-      }
-    }
-    
-    if (!configContent) {
+    if (existingPaths.length === 0) {
       console.log('[ProviderDiscovery] No config file found, using defaults');
       return getDefaultProviders();
     }
     
-    console.log('[ProviderDiscovery] Using config:', usedPath);
+    console.log('[ProviderDiscovery] Found configs:', existingPaths.join(', '));
     
-    // 使用 js-yaml 正规解析 YAML
-    const parsed = load(configContent);
-    
-    if (!Array.isArray(parsed)) {
-      console.warn('[ProviderDiscovery] Unexpected YAML structure, using defaults');
-      return getDefaultProviders();
-    }
-    
-    const seen = new Set();
-
-    // 只收集 llm-pi-ai 下配置的 provider。DSH 内置的 DeepSeek 账号 / DeepSeek 直连
-    // 由官方插件自己管理限速，本插件不再把它们列入服务商列表。
-    for (const entry of parsed) {
-      if (!entry || entry.id !== 'llm-pi-ai' || !entry.config || !entry.config.providers) continue;
-      for (const [providerId, providerConfig] of Object.entries(entry.config.providers)) {
-        if (!providerConfig || typeof providerConfig !== 'object') continue;
-        const id = providerId.toLowerCase();
-        if (seen.has(id)) continue;
-        seen.add(id);
-        providers.push({
-          id,
-          displayName: providerConfig.displayName || providerId,
-          baseUrl: providerConfig.baseURL || inferBaseUrl(providerId)
-        });
+    // 按优先级顺序遍历每个配置文件，合并 provider
+    for (const configPath of existingPaths) {
+      let configContent;
+      try {
+        configContent = readFileSync(configPath, 'utf-8');
+      } catch (e) {
+        console.warn('[ProviderDiscovery] Failed to read:', configPath, e.message);
+        continue;
+      }
+      
+      let parsed;
+      try {
+        parsed = load(configContent);
+      } catch (e) {
+        console.warn('[ProviderDiscovery] Failed to parse YAML:', configPath, e.message);
+        continue;
+      }
+      
+      if (!Array.isArray(parsed)) {
+        console.warn('[ProviderDiscovery] Unexpected YAML structure:', configPath);
+        continue;
+      }
+      
+      // 解析该文件中的 provider
+      for (const entry of parsed) {
+        if (!entry || entry.id !== 'llm-pi-ai' || !entry.config || !entry.config.providers) continue;
+        for (const [providerId, providerConfig] of Object.entries(entry.config.providers)) {
+          if (!providerConfig || typeof providerConfig !== 'object') continue;
+          const id = providerId.toLowerCase();
+          if (seen.has(id)) continue; // 已在更高优先级文件中出现，跳过
+          seen.add(id);
+          providers.push({
+            id,
+            displayName: providerConfig.displayName || providerId,
+            baseUrl: providerConfig.baseURL || inferBaseUrl(providerId),
+            sourceFile: configPath // 标记来源文件，供 UI 展示
+          });
+        }
       }
     }
-
+    
     // 没有发现任何 provider 时回退到默认预设
     if (providers.length === 0) {
       return getDefaultProviders();
