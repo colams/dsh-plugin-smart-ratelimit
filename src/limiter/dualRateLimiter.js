@@ -21,8 +21,12 @@ const CONFIG_DIR = ConfigPaths.dir;
  */
 export class SmoothTokenBucket {
   constructor(capacity, refillRatePerMs, initialBurstFactor = 0.2) {
-    this.capacity = Math.max(1, Math.floor(capacity));
-    this.refillRatePerMs = refillRatePerMs;
+    // 防御：配置缺失/非法时不能让 capacity 变成 NaN，否则 tokens 全为 NaN，
+    // waitTimeFor 返回 NaN，调度循环会永远拿不到令牌（对话直接挂死）。
+    const safeCapacity = Number.isFinite(capacity) && capacity > 0 ? capacity : 1;
+    const safeRefill = Number.isFinite(refillRatePerMs) && refillRatePerMs > 0 ? refillRatePerMs : 0;
+    this.capacity = Math.max(1, Math.floor(safeCapacity));
+    this.refillRatePerMs = safeRefill;
     this.tokens = Math.max(1, Math.floor(this.capacity * initialBurstFactor));
     this.lastRefill = Date.now();
     this.initialBurstFactor = initialBurstFactor;
@@ -405,6 +409,15 @@ export class DualRateLimiter extends EventEmitter {
     if (!this.config.enabled) {
       return { allowed: true };
     }
+
+    // 限额配置非法（缺失或 <= 0）：直接放行，避免排队永远拿不到令牌而卡死对话
+    if (!Number.isFinite(this.config.rpm) || this.config.rpm <= 0) {
+      if (!this._warnedInvalidRpm) {
+        this._warnedInvalidRpm = true;
+        console.warn(`[SmartRateLimit] ${this.providerId}: rpm 配置非法（${this.config.rpm}），已放行请求；请在面板或配置文件中设置有效 RPM`);
+      }
+      return { allowed: true, bypassed: true };
+    }
     
     // 1. 日配额熔断检查（只检查是否已耗尽，不推进计数；
     // 计数由拦截器在响应成功后调用 dailyQuota.recordUsage() 推进，
@@ -567,7 +580,9 @@ export class DualRateLimiter extends EventEmitter {
       const tpmWait = this.tpmBucket ? this.tpmBucket.waitTimeFor(item.estimatedTokens) : 0;
       const waitMs = Math.max(rpmWait, tpmWait);
       
-      if (waitMs <= 0) {
+      // waitMs 为 NaN/Infinity 说明限额配置异常（缺失或为 0），
+      // 此时永远等不到令牌；放行而不是死循环，避免整轮对话卡死。
+      if (!Number.isFinite(waitMs) || waitMs <= 0) {
         // 可以立即放行：按当前位置移除队首（而非 shift，保持相对顺序）
         this.queue.splice(headIndex, 1);
         if (item.timeoutId) clearTimeout(item.timeoutId);

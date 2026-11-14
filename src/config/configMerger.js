@@ -175,6 +175,21 @@ export function getUserCustomConfig(providerId) {
  * @param {string} providerId 
  * @returns {Object} 合并后的完整配置
  */
+/**
+ * 只合并「已定义」的字段。
+ * 上层配置经常只声明部分字段（例如 DSH 的 provider 只写了 retryPolicy，
+ * 没有 rpm/tpm），若直接展开会把底层的兜底值覆盖成 undefined，
+ * 导致限速器拿不到 RPM、退化成 bypass。
+ */
+function mergeDefined(base, layer) {
+  if (!layer) return base;
+  const out = { ...base };
+  for (const [key, value] of Object.entries(layer)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
 export function mergeProviderConfig(providerId) {
   const id = providerId.toLowerCase();
   
@@ -184,25 +199,25 @@ export function mergeProviderConfig(providerId) {
   // 第4层：默认预设
   const defaultPreset = getDefaultPresetConfig(id);
   if (defaultPreset) {
-    merged = { ...merged, ...defaultPreset };
+    merged = mergeDefined(merged, defaultPreset);
   }
   
   // 第3层：系统自动配置
   const systemAuto = getSystemAutoConfig(id);
   if (systemAuto) {
-    merged = { ...merged, ...systemAuto };
+    merged = mergeDefined(merged, systemAuto);
   }
   
   // 第2层：探测/历史校准
   const probedHistory = getProbedAndHistoryConfig(id);
   if (probedHistory) {
-    merged = { ...merged, ...probedHistory };
+    merged = mergeDefined(merged, probedHistory);
   }
   
   // 第1层：用户自定义（最高优先级）
   const userCustom = getUserCustomConfig(id);
   if (userCustom) {
-    merged = { ...merged, ...userCustom };
+    merged = mergeDefined(merged, userCustom);
   }
   
   return merged;

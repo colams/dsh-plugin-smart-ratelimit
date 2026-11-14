@@ -35,3 +35,8 @@ coverage/
 # 测试隔离用临时配置目录
 test/.test-config-tmp/
 test/.test-config-integration/
+# 运行时配置（不提交用户/探测产生的配置）
+config/rate_limit_settings.json
+config/rate_limit_429_history.json
+config/probed_model_limits.json
+config/route-status.json

@@ -5,7 +5,7 @@
  */
 
 import { RequestInterceptor, requestInterceptor } from './intercept/requestInterceptor.js';
-import { discoverProviders, getDefaultConfig, getAllDefaultPresets } from './config/providerDiscovery.js';
+import { discoverProviders, getDefaultConfig, getAllDefaultPresets, getProviderDetail, resolveProviderApiKey } from './config/providerDiscovery.js';
 import { DualRateLimiter, RateLimiterManager } from './limiter/dualRateLimiter.js';
 import { metricsTracker, historyTracker } from './history/metricsTracker.js';
 import { mergeProviderConfig, getConfigSourceDescription } from './config/configMerger.js';
@@ -254,6 +254,7 @@ export class SmartRateLimitPlugin {
       clearHistory: (providerId) => this.clearHistory(providerId),
       getMonitorData: (providerId) => this.getMonitorData(providerId),
       getHistory: (providerId) => this.getHistory(providerId),
+      getProbeDefaults: (providerId) => this.getProbeDefaults(providerId),
       startProbe: (providerId, modelId, apiKey, options) => this.startProbe(providerId, modelId, apiKey, options),
       getProbeStatus: (taskId) => this.getProbeStatus(taskId),
       addProvider: (payload) => this.addProvider(payload),
@@ -336,150 +337,134 @@ export class SmartRateLimitPlugin {
   }
 
   /**
-   * 注册请求拦截器
-   * 对接 DSH 的 llm/stream 钩子：包装流式响应，在首个 chunk 前 acquire、流结束后 release
-   * 兼容 Node.js 原生流与 Web API ReadableStream
+   * 注册 LLM 流式拦截器
+   *
+   * DSH 的 `llm/stream` 是 **waterfall** 事件（Koa 式），不是普通广播事件：
+   *   ctx.waterfall(this, 'llm/stream', options, () => adapterStream(...))
+   * 监听器签名固定为 `(options, next)`：
+   *   - `options` 是完整请求（provider / model / messages / signal ...）
+   *   - `next()` 返回真实 chunk stream（async generator，逐块 yield）
+   *   - 监听器返回值就是最终交给宿主的流，宿主随后用 `yield*` 消费
+   *
+   * 因此绝不能把 `next`（一个函数）当成流返回，否则宿主会抛
+   * `yield* (intermediate value) is not async iterable`。
+   * 正确做法：先 `next()` 取流，再返回一个 async generator 逐块透传，
+   * 在首个 chunk 前 acquire、在流结束时 postProcess。
    */
   registerRequestInterceptor() {
     if (!this.ctx.on || typeof this.ctx.on !== 'function') return;
 
-    const interceptor = this.interceptor;
-    const buildResponse = this.buildResponseFromChunks.bind(this);
-
-    this.ctx.on('llm/stream', (request, stream) => {
+    this.ctx.on('llm/stream', (options, next) => {
+      // waterfall 契约：必须调用 next() 取到内层真实流
+      const stream = typeof next === 'function' ? next() : next;
       if (!this.initialized || !stream) return stream;
 
-      // 如果请求已标记跳过限速，直接透传
-      if (request._skipRateLimit || request._isPolling) return stream;
+      // 轮询/内部请求跳过限速，原样透传
+      if (options && (options._skipRateLimit || options._isPolling)) return stream;
 
-      // 将输入流统一转为 Web API ReadableStream
-      // DSH 可能传 Node.js 原生流，需用 toWeb() 转换（Node 17+）
-      let webStream = stream;
-      if (typeof stream.pipeThrough !== 'function' && typeof stream.toWeb === 'function') {
-        // Node.js 原生流转 Web API 流
-        webStream = stream.toWeb();
-      } else if (typeof stream.pipeThrough !== 'function') {
-        // 既不是 Web 流也无法转换，直接透传不拦截
-        console.warn('[SmartRateLimit] llm/stream: unsupported stream type, bypassing');
+      try {
+        return this._tapLlmStream(options || {}, stream);
+      } catch (error) {
+        // 包装失败绝不阻断宿主请求
+        console.warn('[SmartRateLimit] llm/stream wrapping failed, bypassing:', error.message);
         return stream;
       }
-
-      // 创建 TransformStream 包装器
-      // - start: 流开始被消费时调用 acquire()
-      // - transform: 透传 chunk
-      // - flush: 流结束（正常或异常）时调用 postProcess()
-      let acquired = false;
-      let requestWithRatelimit = null;
-      let chunks = [];
-      let streamEnded = false;
-      let streamError = null;
-
-      const transformer = new TransformStream({
-        async start(controller) {
-          // 流开始被消费：执行 acquire
-          try {
-            requestWithRatelimit = await interceptor.intercept(request);
-            acquired = true;
-          } catch (error) {
-            // acquire 失败（如 RPD 超限）：直接报错，不阻断原流
-            controller.error(error);
-            return;
-          }
-        },
-        transform(chunk, controller) {
-          // 缓存 chunk 用于后续 release 时重构响应
-          chunks.push(chunk);
-          controller.enqueue(chunk);
-        },
-        async flush(controller) {
-          streamEnded = true;
-          if (!acquired || !requestWithRatelimit) return;
-
-          // 从流式 chunks 重构类响应对象供 postProcess 使用
-          const response = buildResponse(chunks, streamError);
-          
-          try {
-            await interceptor.postProcess(requestWithRatelimit, response);
-          } catch (error) {
-            // 429 (RATE_LIMIT_EXCEEDED) 需要向上抛出让 DSH 重试
-            if (error.message === 'RATE_LIMIT_EXCEEDED') {
-              controller.error(error);
-            }
-            // 其他错误只记录不阻断
-            else {
-              console.error('[SmartRateLimit] Stream postProcess failed:', error);
-            }
-          }
-        }
-      });
-
-      // 捕获流错误，确保 flush 能拿到 error
-      const wrappedStream = webStream.pipeThrough(transformer);
-      wrappedStream.getReader().closed.catch(err => {
-        streamError = err;
-        if (!streamEnded && acquired && requestWithRatelimit) {
-          // 流异常中断，手动触发 flush 逻辑
-          const response = buildResponse(chunks, err);
-          interceptor.postProcess(requestWithRatelimit, response).catch(() => {});
-        }
-      });
-
-      return wrappedStream;
     });
   }
 
   /**
-   * 从流式 chunks 重构响应对象供 postProcess 使用
-   * 兼容 SSE 格式和普通 JSON chunk 格式
+   * 逐块透传上游 chunk stream，同时执行限速记账。
+   * 返回 async generator，满足宿主 `yield*` 消费契约。
    */
-  buildResponseFromChunks(chunks, error = null) {
-    if (error) {
+  async *_tapLlmStream(options, stream) {
+    const request = this._buildRateLimitRequest(options);
+
+    let requestWithRatelimit = null;
+    let usage = null;
+    let finish = null;
+    let streamError = null;
+
+    try {
+      // 首个 chunk 前申请许可：排队等待 + 扣减 RPM/TPM（这是限速的核心价值）
+      try {
+        requestWithRatelimit = await this.interceptor.intercept(request);
+      } catch (error) {
+        // RPD 硬熔断：明确阻断本轮请求（配置里 rpd>0 且已用尽）
+        if (error && error.message === 'ERR_RPD_EXCEEDED') throw error;
+        // 其他 acquire 失败（配置缺失等）不阻断对话
+        console.error('[SmartRateLimit] acquire failed:', error && error.message);
+      }
+
+      for await (const chunk of stream) {
+        if (chunk && typeof chunk === 'object') {
+          if (chunk.type === 'usage') usage = chunk.usage;
+          else if (chunk.type === 'finish') finish = chunk;
+        }
+        yield chunk;
+      }
+    } catch (error) {
+      streamError = error;
+      throw error;
+    } finally {
+      if (requestWithRatelimit) {
+        const response = this._buildResponseFromStream(usage, finish, streamError);
+        // 不 await：429 冷却门可能等待十几秒，不能拖住流关闭
+        this.interceptor.postProcess(requestWithRatelimit, response).catch((err) => {
+          if (err && err.message === 'RATE_LIMIT_EXCEEDED') {
+            console.error('[SmartRateLimit] 429 recorded (DSH retryPolicy will retry)');
+          } else {
+            console.error('[SmartRateLimit] postProcess failed:', err && err.message);
+          }
+        });
+      }
+    }
+  }
+
+  /** 把 DSH 的 stream options 映射为本插件拦截器需要的请求形状。 */
+  _buildRateLimitRequest(options) {
+    const provider = options.provider;
+    const providerId = typeof provider === 'string'
+      ? provider
+      : (provider && (provider.id || provider.name)) || '';
+
+    return {
+      providerId,
+      modelId: options.model,
+      messages: options.messages,
+      max_tokens: options.maxTokens ?? options.max_tokens,
+      isFreeModel: options.isFreeModel,
+      signal: options.signal,
+      _skipRateLimit: options._skipRateLimit,
+      _isPolling: options._isPolling
+    };
+  }
+
+  /** 由 chunk 流里的 usage / finish 信息重建 postProcess 需要的响应对象。 */
+  _buildResponseFromStream(usage, finish, streamError) {
+    const failure = finish?.reason?.failure || streamError;
+    const isError = Boolean(failure) || finish?.reason?.kind === 'error';
+
+    if (isError) {
+      const code = String(failure?.code || failure?.message || '');
+      const isRateLimit = /RATE_LIMIT|rate.?limit|429/i.test(code);
       return {
-        status: 0,
-        statusText: error.message || 'Stream error',
+        status: isRateLimit ? 429 : 0,
+        statusText: code || 'stream error',
         headers: {},
-        data: null,
-        _streamError: true,
-        _streamErrorDetail: error
+        data: { error: failure || finish?.reason }
       };
     }
 
-    // 尝试解析最后一个有效的 data chunk 作为完整响应
-    // DSH 的流式响应通常最后会发送完整的 response 对象
-    let lastData = null;
-    for (let i = chunks.length - 1; i >= 0; i--) {
-      const chunk = chunks[i];
-      if (chunk && typeof chunk === 'object' && chunk.data) {
-        lastData = chunk;
-        break;
-      }
-      // SSE 格式：{ data: '...' } 或直接是字符串
-      if (chunk && typeof chunk === 'object' && chunk.choices) {
-        lastData = chunk;
-        break;
-      }
-    }
+    const total = usage?.totalTokens ?? usage?.total_tokens
+      ?? (typeof usage?.inputTokens === 'number' && typeof usage?.outputTokens === 'number'
+        ? usage.inputTokens + usage.outputTokens
+        : undefined);
 
-    if (lastData) {
-      return {
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        data: lastData,
-        _streaming: true,
-        _chunkCount: chunks.length
-      };
-    }
-
-    // 兜底：返回基础成功响应
     return {
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: { choices: [] },
-      _streaming: true,
-      _chunkCount: chunks.length,
-      _incomplete: true
+      data: total === undefined ? {} : { usage: { total_tokens: total } }
     };
   }
 
@@ -573,16 +558,61 @@ export class SmartRateLimitPlugin {
   }
 
   /**
+   * 探测表单的自动填充数据：模型列表、baseURL、密钥来源。
+   *
+   * 前端打开弹窗时调用，选择服务商即可带出全部参数，
+   * 不需要用户手填 modelId / API Key / baseURL。
+   *
+   * @param {string} providerId
+   * @returns {Object}
+   */
+  getProbeDefaults(providerId) {
+    if (!providerId) return { success: false, error: 'providerId 不能为空' };
+
+    const detail = getProviderDetail(providerId);
+    const preset = getDefaultConfig(providerId) || {};
+    const baseUrl = detail.baseUrl || preset.baseUrl || '';
+
+    return {
+      success: true,
+      providerId: detail.providerId,
+      displayName: detail.displayName,
+      baseUrl,
+      apiKeyEnv: detail.apiKeyEnv,
+      // 只告诉前端「能不能自动取到」，绝不回传密钥本身
+      apiKeyAvailable: detail.apiKeyAvailable,
+      models: detail.models,
+      sourceFile: detail.sourceFile,
+      canAutoProbe: Boolean(baseUrl && detail.apiKeyAvailable && detail.models.length > 0)
+    };
+  }
+
+  /**
    * 启动异步探测任务
    * @param {string} providerId
    * @param {string} modelId
-   * @param {string} apiKey
+   * @param {string} apiKey - 可省略：省略时由 Host 从环境变量/DSH 凭据库读取
    * @param {Object} options - { maxRpm, step, timeout, baseUrl }
    * @returns {Object} { taskId }
    */
   async startProbe(providerId, modelId, apiKey, options = {}) {
-    if (!providerId || !modelId || !apiKey) {
-      return { success: false, error: 'providerId, modelId, apiKey 均为必填' };
+    if (!providerId || !modelId) {
+      return { success: false, error: 'providerId 与 modelId 均为必填' };
+    }
+
+    // 密钥不再要求前端手填：优先用传入值，否则从 Host 侧解析
+    const resolvedApiKey = (typeof apiKey === 'string' && apiKey.trim())
+      ? apiKey.trim()
+      : resolveProviderApiKey(providerId);
+
+    if (!resolvedApiKey) {
+      const detail = getProviderDetail(providerId);
+      return {
+        success: false,
+        error: detail.apiKeyEnv
+          ? `读不到该服务商的 API Key（环境变量 / DSH 凭据库中的 ${detail.apiKeyEnv}），请在「设置 → 模型」里填写，或手动输入`
+          : '该服务商未声明 apiKeyEnv，无法自动获取 API Key，请手动输入'
+      };
     }
 
     const taskId = `probe_${Date.now()}_${++this._probeTaskCounter}`;
@@ -590,7 +620,7 @@ export class SmartRateLimitPlugin {
       taskId,
       providerId,
       modelId,
-      apiKey,
+      apiKey: resolvedApiKey,
       options: {
         maxRpm: options.maxRpm || 100,
         step: options.step || 5,
@@ -644,8 +674,9 @@ export class SmartRateLimitPlugin {
     // 确定 baseUrl
     let baseUrl = options.baseUrl;
     if (!baseUrl) {
+      const detail = getProviderDetail(providerId);
       const defaultConfig = getDefaultConfig(providerId);
-      baseUrl = defaultConfig?.baseUrl || '';
+      baseUrl = detail.baseUrl || defaultConfig?.baseUrl || '';
     }
     if (!baseUrl) {
       task.status = 'failed';
@@ -705,12 +736,15 @@ export class SmartRateLimitPlugin {
     let iteration = 0;
     const maxIterations = Math.ceil(Math.log2(maxRpm / step)) + 2;
 
+    // 立即报告初始进度，避免卡在 0%
+    if (onProgress) onProgress(0.05);
+
     while (low <= high && iteration < maxIterations) {
       iteration++;
       const mid = Math.floor((low + high) / 2);
       const testRpm = Math.max(step, Math.floor(mid / step) * step);
 
-      if (onProgress) onProgress(iteration / maxIterations);
+      if (onProgress) onProgress(0.05 + 0.4 * (iteration / maxIterations)); // RPM 阶段占 45%
 
       const intervalMs = 60000 / testRpm;
       const requestCount = Math.min(10, testRpm);
@@ -722,18 +756,31 @@ export class SmartRateLimitPlugin {
       for (let i = 0; i < requestCount; i++) {
         const delay = i * intervalMs;
         promises.push(
-          new Promise(resolve => setTimeout(() => resolve(this._sendTestRequest(baseUrl, apiKey, model, 16, timeout)), delay))
+          new Promise(async (resolve) => {
+            await new Promise(r => setTimeout(r, delay));
+            try {
+              const res = await this._sendTestRequest(baseUrl, apiKey, model, 16, timeout);
+              resolve(res);
+            } catch (e) {
+              resolve({ status: 0, error: e.message });
+            }
+          })
         );
       }
 
-      const results = await Promise.all(promises);
+      // 单个请求超时保护：Promise.allSettled + 单请求超时包装
+      const results = await Promise.allSettled(promises);
 
-      for (const result of results) {
-        if (result.status === 200) successCount++;
-        else if (result.status === 429) error429Count++;
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          if (r.value.status === 200) successCount++;
+          else if (r.value.status === 429) error429Count++;
+        }
+        // rejected 视为失败，不计入 success/429
       }
 
       if (error429Count > 0) {
+        last429Rpm = testRpm;  // ★ 关键修复：记录触发 429 的 RPM
         high = testRpm - step;
         consecutive429++;
         if (consecutive429 >= 2) break;
@@ -765,9 +812,11 @@ export class SmartRateLimitPlugin {
     let maxSafeTpm = 0;
     let triggeredAtTpm = null;
 
+    if (onProgress) onProgress(0.5); // TPM 阶段从 50% 开始
+
     for (let i = 0; i < testTokens.length; i++) {
       const tokens = testTokens[i];
-      if (onProgress) onProgress(i / testTokens.length);
+      if (onProgress) onProgress(0.5 + 0.45 * (i / testTokens.length));
 
       const result = await this._sendTestRequest(baseUrl, apiKey, model, tokens, timeout);
 
@@ -796,8 +845,11 @@ export class SmartRateLimitPlugin {
    * 发送测试请求
    */
   async _sendTestRequest(baseUrl, apiKey, model, maxTokens, timeout) {
+    // 两层超时：连接超时 10s + 总超时 timeout
+    const connectTimeout = Math.min(10000, timeout);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    const connectTimer = setTimeout(() => controller.abort(), connectTimeout);
+    const totalTimer = setTimeout(() => controller.abort(), timeout);
 
     try {
       const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -815,7 +867,8 @@ export class SmartRateLimitPlugin {
         signal: controller.signal
       });
 
-      clearTimeout(timeoutId);
+      clearTimeout(connectTimer);
+      clearTimeout(totalTimer);
 
       const data = await response.json().catch(() => ({}));
 
@@ -826,9 +879,12 @@ export class SmartRateLimitPlugin {
         error: null
       };
     } catch (error) {
-      clearTimeout(timeoutId);
+      clearTimeout(connectTimer);
+      clearTimeout(totalTimer);
+      // 区分超时类型
+      const isTimeout = error.name === 'AbortError' || error.message?.includes('timeout') || error.message?.includes('aborted');
       return {
-        status: 0,
+        status: isTimeout ? 408 : 0,
         headers: {},
         data: null,
         error: error.message

@@ -105,7 +105,15 @@ const finalResponse = await ratelimit.release(request, response)
 
 **指标去重修复**：`metricsTracker.recordRequest()` 现在仅在 `DualRateLimiter.acquire()` 第 447 行调用一次。`RequestInterceptor.intercept()` 不再重复记录。子限速器通过 `_skipMetrics: true` 显式跳过记录，由主限速器统一聚合，消除了约 2× 的 RPM/TPM 数值放大问题。
 
-**探测系统集成**：`src/index.js` 新增 `startProbe(providerId, modelId, apiKey, options)` 与 `getProbeStatus(taskId)` RPC，内部复用 `probeModels.mjs` 的二分法 RPM 探测 + 线性 TPM 探测算法。面板通过模态表单收集参数，启动任务后 3 秒轮询进度，完成后结果写入 `probed_model_limits.json`，下次启动自动为该模型创建子限速器（`getSubLimiter` 判定更严格时）。
+**探测系统集成**：`src/index.js` 新增 `getProbeDefaults(providerId)`、`startProbe(providerId, modelId, apiKey, options)` 与 `getProbeStatus(taskId)` RPC，内部复用 `probeModels.mjs` 的二分法 RPM 探测 + 线性 TPM 探测算法。
+
+探测参数**全部自动读取 DSH 配置**，不需要用户手填：
+
+- `getProbeDefaults(providerId)` 从 `cordis.patch.yml` 读取该 provider 的 `models`、`baseURL`、`apiKeyEnv`，返回模型下拉选项与「密钥能否自动取到」；**绝不回传密钥明文**。
+- 密钥解析顺序：`process.env[apiKeyEnv]` → `~/.dsh/.credentials.yaml` 的 `refs[apiKeyEnv]`（DSH 本地凭据库，Web「模型」页面填写的 Key 落在这里）。`startProbe` 的 `apiKey` 因此可省略。
+- 面板打开弹窗即拉取上述信息，模型为下拉、Base URL 只读展示；仅当密钥确实取不到时才回退到手动输入框。
+
+启动任务后 3 秒轮询进度，完成后结果写入 `probed_model_limits.json`，下次启动自动为该模型创建子限速器（`getSubLimiter` 判定更严格时）。
 
 **自动退避策略**：`RequestInterceptor.calculateBackoff()` 中 `strategy: 'auto'` 现在按 provider 智能选择：`nvidia*` → fixed 15s、agnes → exponential、其他 → exponential 并优先读取 `Retry-After` 头。
 
@@ -387,7 +395,8 @@ const finalResponse = await ratelimit.release(request, response)
 | `clearHistory(providerId)` | 清空该 Provider 的 429 历史 |
 | `getMonitorData(providerId)` | 队列长度、窗口 RPM/TPM、RPD、桶状态 |
 | `getHistory(providerId)` | 原始历史记录 |
-| `runProbe(providerId)` | 预留；当前返回 `Probe functionality to be implemented` |
+| `getProbeDefaults(providerId)` | 探测表单自动填充：模型列表、baseURL、apiKeyEnv、密钥是否可取到、`canAutoProbe` |
+| `runProbe(providerId)` | 旧接口，保留兼容；实际探测走 `startProbe` |
 | `addProvider({id, displayName, baseUrl})` | 新增自定义 Provider |
 | `removeProvider(providerId)` | 移除本插件的 Provider 配置 |
 
@@ -420,7 +429,7 @@ Content-Type: application/json
 - 菜单：设置 → 速率设置（section id `smart-ratelimit`，order 100）。
 - Provider 下拉：显示 `displayName（id）`，默认选中列表第一项。
 - 历史横幅：有 429 历史时显示触发时的 RPM/TPM、模型和建议上限；无历史时隐藏。
-- 表单：启用开关、RPM 数字输入框（1–10000）、TPM、RPD（仅 `nvidia` 显示）、退避策略、固定等待秒数、仅免费模型开关、优先级徽章。
+- 表单：RPM 数字输入框（1–10000）、TPM、RPD（仅 `nvidia` 显示）、退避策略、固定等待秒数、仅免费模型开关、优先级徽章；**启用开关已并入服务商栏**，形式为「已启用限速 / 未启用限速」文字胶囊 + 右侧迷你开关（hover 显示原说明）。
 - 实时监控：每 5 秒拉取一次，显示排队数、近 1 分钟请求、近 1 分钟 Token、今日已用（`dailyLimit > 0` 时）。
 - 操作：保存并生效、恢复默认、清空 429 历史、探测模型阈值（当前为占位）。「恢复默认」使用面板内置的 `nvidia` / `agnes` / `default` 三组数值，不读取 `default_presets.json`。
 - 新增/删除 Provider：新增会写入 `__customProviders` 并创建默认限速器；删除会移除配置并写入 `__removedProviders`。

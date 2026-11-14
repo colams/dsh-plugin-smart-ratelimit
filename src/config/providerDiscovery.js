@@ -117,6 +117,132 @@ export async function discoverProviders() {
 }
 
 /**
+ * 读取 DSH 本地凭据库里的 refs 映射。
+ * DSH 把 `apiKeyEnv` 当作 credential-ref，Web 的「模型」页面填写的 Key
+ * 会落到 ~/.dsh/.credentials.yaml 的 refs 下（可能是明文，也可能是密文；
+ * 读不到值时上层会回退到「让用户手填」）。
+ * @returns {Record<string, string>}
+ */
+function readCredentialRefs() {
+  try {
+    const home = process.env.HOME || process.env.USERPROFILE;
+    if (!home) return {};
+    const path = process.env.DSH_CREDENTIALS_PATH || join(home, '.dsh', '.credentials.yaml');
+    if (!existsSync(path)) return {};
+    const doc = load(readFileSync(path, 'utf-8'));
+    const refs = doc && typeof doc === 'object' ? doc.refs : null;
+    if (!refs || typeof refs !== 'object') return {};
+    return refs;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 在 DSH 配置里查找某个 Provider 的原始定义（按候选路径优先级）。
+ * @param {string} providerId
+ * @returns {{providerConfig: object, configPath: string}|null}
+ */
+function findProviderConfig(providerId) {
+  const id = String(providerId || '').toLowerCase();
+  for (const configPath of getCandidateConfigPaths()) {
+    if (!existsSync(configPath)) continue;
+    let parsed;
+    try {
+      parsed = load(readFileSync(configPath, 'utf-8'));
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) continue;
+    for (const entry of parsed) {
+      if (!entry || entry.id !== 'llm-pi-ai') continue;
+      const providerConfigs = entry.config && entry.config.providers;
+      if (!providerConfigs) continue;
+      const providerConfig = providerConfigs[id];
+      if (providerConfig && typeof providerConfig === 'object') {
+        return { providerConfig, configPath };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 从环境变量或 DSH 凭据库解析 Provider 的 API Key（Host 侧使用，不要外传）。
+ * @param {string} providerId
+ * @returns {string} 读不到时返回空字符串
+ */
+export function resolveProviderApiKey(providerId) {
+  const found = findProviderConfig(providerId);
+  const apiKeyEnv = found && typeof found.providerConfig.apiKeyEnv === 'string'
+    ? found.providerConfig.apiKeyEnv
+    : null;
+  if (!apiKeyEnv) return '';
+
+  const fromEnv = process.env[apiKeyEnv];
+  if (typeof fromEnv === 'string' && fromEnv) return fromEnv;
+
+  const stored = readCredentialRefs()[apiKeyEnv];
+  return typeof stored === 'string' ? stored : '';
+}
+
+/**
+ * 读取单个 Provider 的完整定义（模型列表、baseURL、apiKeyEnv），供探测表单自动填充。
+ *
+ * 只返回「环境变量名」与「是否已能取到密钥」，绝不把密钥明文传给前端；
+ * 真正调用探测接口时由 Host 侧读取。
+ *
+ * @param {string} providerId
+ * @returns {{providerId: string, displayName: string, baseUrl: string, apiKeyEnv: string|null,
+ *            apiKeyAvailable: boolean, models: Array<{id: string, name: string}>,
+ *            sourceFile: string|null}}
+ */
+export function getProviderDetail(providerId) {
+  const id = String(providerId || '').toLowerCase();
+  const found = findProviderConfig(id);
+
+  if (found) {
+    const { providerConfig, configPath } = found;
+    const models = Array.isArray(providerConfig.models)
+      ? providerConfig.models
+          .filter((model) => model && typeof model.id === 'string')
+          .map((model) => ({
+            id: model.id,
+            name: model.name || model.id,
+            contextWindow: model.contextWindow ?? null,
+            maxTokens: model.maxTokens ?? null
+          }))
+      : [];
+
+    const apiKeyEnv = typeof providerConfig.apiKeyEnv === 'string' && providerConfig.apiKeyEnv
+      ? providerConfig.apiKeyEnv
+      : null;
+
+    return {
+      providerId: id,
+      displayName: providerConfig.displayName || id,
+      baseUrl: providerConfig.baseURL || inferBaseUrl(id),
+      apiKeyEnv,
+      apiKeyAvailable: Boolean(resolveProviderApiKey(id)),
+      models,
+      sourceFile: configPath
+    };
+  }
+
+  // 回退到内置预设
+  const preset = getDefaultConfig(id) || {};
+  return {
+    providerId: id,
+    displayName: preset.displayName || id,
+    baseUrl: preset.baseUrl || inferBaseUrl(id),
+    apiKeyEnv: null,
+    apiKeyAvailable: Boolean(preset.apiKeyEnv && process.env[preset.apiKeyEnv]),
+    models: [],
+    sourceFile: null
+  };
+}
+
+/**
  * 根据 provider ID 推断显示名称
  */
 function formatDisplayName(id) {
@@ -203,6 +329,8 @@ export function getAllDefaultPresets() {
 
 export default {
   discoverProviders,
+  getProviderDetail,
+  resolveProviderApiKey,
   getDefaultConfig,
   getAllDefaultPresets
 };

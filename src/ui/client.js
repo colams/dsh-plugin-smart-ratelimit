@@ -63,14 +63,26 @@ window.__ModuleLoader__.load({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px 16px;
+  flex-wrap: wrap;
 }
+/* 标题绝不能被右侧操作区挤成竖排（中文可逐字断行，必须禁掉） */
+.rl-provider-head > .rl-row-title { flex: 0 0 auto; white-space: nowrap; }
 .rl-provider-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  /* 允许收缩：窄屏时先压缩下拉宽度，而不是把标题挤扁或溢出卡片 */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rl-provider-actions .rl-select {
+  flex: 1 1 180px;
+  width: auto;
+  min-width: 150px;
+  max-width: 280px;
 }
 .rl-provider-error {
   flex: 1 1 auto; min-width: 0;
@@ -120,6 +132,36 @@ window.__ModuleLoader__.load({
   transition: transform 0.18s ease;
 }
 .rl-switch[data-on='true'] .rl-switch-knob { transform: translateX(18px); }
+/* 文字 + 开关：无外框，弱化文字、强化开关本身 */
+.rl-text-switch {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 2px; margin: 0;
+  border: none; background: transparent;
+  color: #9a9aa0; font-size: 12px; font-family: inherit; line-height: 1;
+  cursor: pointer; flex-shrink: 0; border-radius: 999px;
+  transition: color 0.18s ease;
+}
+.rl-text-switch:hover { color: #1f1f1f; }
+.rl-text-switch[data-on='true'] { color: #1f1f1f; }
+.rl-text-switch:disabled { opacity: 0.45; cursor: not-allowed; }
+.rl-text-switch:focus-visible { outline: 2px solid #4a7dff; outline-offset: 3px; }
+.rl-text-switch-label { white-space: nowrap; font-weight: 500; letter-spacing: 0.01em; }
+.rl-text-switch-track {
+  position: relative; width: 38px; height: 22px; border-radius: 11px;
+  background: #dcdcdc; flex-shrink: 0;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);
+  transition: background-color 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.rl-text-switch[data-on='true'] .rl-text-switch-track {
+  background: #1f1f1f; box-shadow: none;
+}
+.rl-text-switch-knob {
+  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+  border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.22), 0 0 1px rgba(0,0,0,0.12);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.rl-text-switch[data-on='true'] .rl-text-switch-knob { transform: translateX(16px); }
 .rl-number {
   flex: 0 0 160px; width: 160px;
   padding: 6px 10px; font-size: 13px; font-family: inherit;
@@ -195,6 +237,78 @@ window.__ModuleLoader__.load({
 .rl-status[data-kind='success'] { background: #eefaf1; color: #1e7a3c; }
 .rl-status[data-kind='error'] { background: #fff2f1; color: #c0392b; }
 .rl-status[data-kind='info'] { background: #eef4ff; color: #2f6bff; }
+
+/* ── 探测弹窗（模态框）── */
+/* 探测模态框 */
+.rl-probe-modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.45); z-index: 1000;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  animation: rl-fade-in 0.15s ease;
+}
+.rl-probe-modal {
+  background: #fff; border-radius: 16px; width: 100%; max-width: 520px;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.18);
+  animation: rl-slide-up 0.2s ease;
+  overflow: hidden;
+}
+@keyframes rl-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rl-slide-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+.rl-probe-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 15px 18px 15px 20px; border-bottom: 1px solid #f0f0f0;
+  color: #1a1a2e;
+}
+.rl-probe-modal-header h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.rl-probe-close {
+  flex: 0 0 auto; width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; border-radius: 8px;
+  font-size: 19px; line-height: 1; color: #9a9a9a; cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.rl-probe-close:hover { background: #f0f0f0; color: #1a1a2e; }
+.rl-probe-modal-body { padding: 18px 20px 20px; }
+.rl-probe-form { display: flex; flex-direction: column; gap: 16px; }
+/* 参数来源信息条 */
+.rl-probe-source {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: 10px; background: #f7f7f8;
+  font-size: 12px; color: #6b6b70; line-height: 1.5;
+}
+.rl-probe-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 999px;
+  background: #fff; border: 1px solid #e6e6e8;
+  font-size: 12px; color: #4a4a52; white-space: nowrap;
+}
+.rl-probe-chip[data-tone='ok'] { border-color: #c6f0d3; background: #f2fbf5; color: #1e7a3c; }
+.rl-probe-chip[data-tone='warn'] { border-color: #ffe0b2; background: #fff8ec; color: #9a6b00; }
+/* 两列表单：标签右对齐、控件撑满 */
+.rl-probe-grid {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px 14px;
+}
+.rl-probe-grid > label {
+  font-size: 13px; font-weight: 500; color: #3a3a40;
+  text-align: right; white-space: nowrap;
+}
+.rl-probe-grid .rl-input,
+.rl-probe-grid .rl-select { width: 100%; max-width: none; box-sizing: border-box; }
+.rl-probe-static {
+  min-width: 0; font-size: 13px; color: #6b6b70;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rl-probe-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+.rl-probe-progress { display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center; }
+.rl-probe-stage { font-size: 14px; color: #4a7dff; font-weight: 500; min-height: 20px; }
+.rl-probe-bar { width: 100%; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; }
+.rl-probe-fill { height: 100%; background: linear-gradient(90deg, #4a7dff, #7aa2ff); border-radius: 4px; transition: width 0.3s ease; }
+.rl-probe-percent { font-size: 13px; color: #9a9a9a; font-variant-numeric: tabular-nums; }
+.rl-probe-result { background: #eefaf1; border: 1px solid #c6f0d3; border-radius: 10px; padding: 12px; text-align: left; color: #1e7a3c; font-size: 13px; line-height: 1.8; }
+.rl-probe-error { background: #fff2f1; border: 1px solid #ffd6d3; border-radius: 10px; padding: 12px; color: #c0392b; font-size: 13px; }
 @media (prefers-color-scheme: dark) {
   .rate-limit-settings-view { color: #e8e8ea; }
   .rl-row-title { color: #e8e8ea; }
@@ -207,58 +321,28 @@ window.__ModuleLoader__.load({
   .rl-switch { background: #3a3a40; }
   .rl-switch[data-on='true'] { background: #f0f0f0; }
   .rl-switch[data-on='true'] .rl-switch-knob { background: #1f1f1f; }
+  .rl-text-switch { color: #9a9aa0; }
+  .rl-text-switch:hover, .rl-text-switch[data-on='true'] { color: #e8e8ea; }
+  .rl-text-switch-track { background: #3a3a40; box-shadow: inset 0 1px 2px rgba(0,0,0,0.3); }
+  .rl-text-switch[data-on='true'] .rl-text-switch-track { background: #f0f0f0; box-shadow: none; }
+  .rl-text-switch[data-on='true'] .rl-text-switch-knob { background: #1f1f1f; }
   .rl-monitor-bar { background: #3a3a40; }
   .rl-footer, .rl-monitor { border-color: #33333a; }
   .rl-badge { background: #3a3a40; color: #b8b8be; }
 
-  /* 探测模态框 */
-  .rl-probe-modal-overlay {
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.45); z-index: 1000;
-    display: flex; align-items: center; justify-content: center; padding: 24px;
-    animation: rl-fade-in 0.15s ease;
-  }
-  .rl-probe-modal {
-    background: #fff; border-radius: 16px; width: 100%; max-width: 440px;
-    box-shadow: 0 24px 48px rgba(0,0,0,0.18);
-    animation: rl-slide-up 0.2s ease;
-    overflow: hidden;
-  }
-  @keyframes rl-fade-in { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes rl-slide-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-  .rl-probe-modal-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 16px 20px; border-bottom: 1px solid #f0f0f0;
-    font-size: 16px; font-weight: 500; color: #1a1a2e;
-  }
-  .rl-probe-close {
-    width: 28px; height: 28px; border: none; background: transparent;
-    font-size: 20px; line-height: 1; color: #9a9a9a; cursor: pointer; border-radius: 6px;
-  }
-  .rl-probe-close:hover { background: #f0f0f0; color: #1a1a2e; }
-  .rl-probe-modal-body { padding: 20px; }
-  .rl-probe-form { display: flex; flex-direction: column; gap: 16px; }
-  .rl-probe-field { display: flex; flex-direction: column; gap: 6px; }
-  .rl-probe-field label { font-size: 13px; font-weight: 500; color: #1a1a2e; }
-  .rl-probe-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
-  .rl-probe-progress { display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center; }
-  .rl-probe-stage { font-size: 14px; color: #4a7dff; font-weight: 500; min-height: 20px; }
-  .rl-probe-bar { width: 100%; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; }
-  .rl-probe-fill { height: 100%; background: linear-gradient(90deg, #4a7dff, #7aa2ff); border-radius: 4px; transition: width 0.3s ease; }
-  .rl-probe-percent { font-size: 13px; color: #9a9a9a; font-variant-numeric: tabular-nums; }
-  .rl-probe-result { background: #eefaf1; border: 1px solid #c6f0d3; border-radius: 10px; padding: 12px; text-align: left; color: #1e7a3c; font-size: 13px; line-height: 1.8; }
-  .rl-probe-error { background: #fff2f1; border: 1px solid #ffd6d3; border-radius: 10px; padding: 12px; color: #c0392b; font-size: 13px; }
-  .rl-probe-actions { display: flex; justify-content: center; gap: 10px; margin-top: 8px; }
-
-  @media (prefers-color-scheme: dark) {
-    .rl-probe-modal { background: #232327; }
-    .rl-probe-modal-header { border-color: #33333a; color: #e8e8ea; }
-    .rl-probe-close { color: #9a9aa0; }
-    .rl-probe-close:hover { background: #3a3a40; color: #e8e8ea; }
-    .rl-probe-field label { color: #e8e8ea; }
-    .rl-probe-result { background: #1a2e22; border-color: #2d5a3d; color: #8fd6a6; }
-    .rl-probe-error { background: #2e1a1a; border-color: #5a2d2d; color: #f0a0a0; }
-  }
+  /* 探测弹窗暗色 */
+  .rl-probe-modal { background: #232327; }
+  .rl-probe-modal-header { border-color: #33333a; color: #e8e8ea; }
+  .rl-probe-close { color: #9a9aa0; }
+  .rl-probe-close:hover { background: #3a3a40; color: #e8e8ea; }
+  .rl-probe-source { background: #2a2a2e; color: #9a9aa0; }
+  .rl-probe-chip { background: #33333a; border-color: #3a3a40; color: #c8c8ce; }
+  .rl-probe-chip[data-tone='ok'] { background: #1a2e22; border-color: #2d5a3d; color: #8fd6a6; }
+  .rl-probe-chip[data-tone='warn'] { background: #2e2618; border-color: #5a4a2d; color: #e0b060; }
+  .rl-probe-grid > label { color: #c8c8ce; }
+  .rl-probe-static { color: #9a9aa0; }
+  .rl-probe-result { background: #1a2e22; border-color: #2d5a3d; color: #8fd6a6; }
+  .rl-probe-error { background: #2e1a1a; border-color: #5a2d2d; color: #f0a0a0; }
 }
 `
 
@@ -286,6 +370,8 @@ window.__ModuleLoader__.load({
         removeFailed: '移除失败',
         confirmRemove: '确定移除「{id}」的限速配置吗？之后它不会再出现在列表中。',
         enabled: '启用限速控制',
+        enabledOn: '已启用限速',
+        enabledOff: '未启用限速',
         enabledDesc: '关闭后该服务商的所有请求将不再受限速器约束。',
         sectionLimits: '限速参数',
         sectionBackoff: '退避与生效范围',
@@ -334,7 +420,16 @@ window.__ModuleLoader__.load({
         probeModelPlaceholder: '例如: nvidia/nemotron-3-ultra-550b-a55b',
         probeApiKeyLabel: 'API Key',
         probeApiKeyPlaceholder: 'sk-xxx...',
-        probeBaseUrlLabel: 'API Base URL (可选)',
+        probeBaseUrlLabel: 'Base URL',
+        probeKeyAuto: '密钥已自动读取',
+        probeKeyMissing: '密钥未配置',
+        probeKeyAutoHint: '已从 DSH 配置 / 环境变量自动读取，无需填写',
+        probeKeyFallback: '未自动读取到，可在此手动填入',
+        probeFromConfig: '来自 DSH 配置',
+        probeLoadingDefaults: '正在读取服务商配置…',
+        probeDefaultsFailed: '读取服务商配置失败',
+        probeNeedModel: '请选择要探测的模型',
+        probeBaseUrlMissing: '未在配置中找到 baseURL',
         probeStart: '开始探测',
         probeStage_init: '初始化...',
         probeStage_rpm: '探测 RPM 中...',
@@ -386,6 +481,8 @@ window.__ModuleLoader__.load({
         removeFailed: 'Remove failed',
         confirmRemove: 'Remove the rate-limit config of "{id}"? It will no longer appear in the list.',
         enabled: 'Enable rate limiting',
+        enabledOn: 'Limiting on',
+        enabledOff: 'Limiting off',
         enabledDesc: 'When off, requests to this provider are no longer throttled.',
         sectionLimits: 'Rate limits',
         sectionBackoff: 'Backoff and scope',
@@ -434,7 +531,16 @@ window.__ModuleLoader__.load({
         probeModelPlaceholder: 'e.g., nvidia/nemotron-3-ultra-550b-a55b',
         probeApiKeyLabel: 'API Key',
         probeApiKeyPlaceholder: 'sk-xxx...',
-        probeBaseUrlLabel: 'API Base URL (optional)',
+        probeBaseUrlLabel: 'Base URL',
+        probeKeyAuto: 'Key loaded',
+        probeKeyMissing: 'Key missing',
+        probeKeyAutoHint: 'Read automatically from DSH config / environment; no need to type it',
+        probeKeyFallback: 'Not resolved automatically, you can paste it here',
+        probeFromConfig: 'From DSH config',
+        probeLoadingDefaults: 'Reading provider config…',
+        probeDefaultsFailed: 'Failed to read provider config',
+        probeNeedModel: 'Choose a model to probe',
+        probeBaseUrlMissing: 'No baseURL found in config',
         probeStart: 'Start Probe',
         probeStage_init: 'Initializing...',
         probeStage_rpm: 'Probing RPM...',
@@ -581,6 +687,28 @@ window.__ModuleLoader__.load({
       }, h('span', { className: 'rl-switch-knob' }))
     }
 
+    /**
+     * 带文字的开关：左侧显示当前状态文字，右侧是迷你开关。
+     * 用于把「启用限速控制」收进服务商栏，节省一整行。
+     */
+    function TextSwitch({ checked, onChange, onText, offText, disabled, title }) {
+      return h('button', {
+        type: 'button',
+        className: 'rl-text-switch',
+        'data-on': checked ? 'true' : 'false',
+        role: 'switch',
+        'aria-checked': checked ? 'true' : 'false',
+        'aria-label': checked ? onText : offText,
+        title: title || '',
+        disabled: !!disabled,
+        onClick: () => { if (!disabled) onChange(!checked) },
+      },
+        h('span', { className: 'rl-text-switch-label' }, checked ? onText : offText),
+        h('span', { className: 'rl-text-switch-track' },
+          h('span', { className: 'rl-text-switch-knob' })),
+      )
+    }
+
     /** 数字输入框。直接返回输入框 + 单位，由外层 .rl-row-control 统一排布。 */
     function NumberField({ value, min, max, step, onChange, disabled, unit }) {
       return h(React.Fragment, null,
@@ -619,6 +747,9 @@ window.__ModuleLoader__.load({
       const [probeBaseUrl, setProbeBaseUrl] = useState('')
       const [probeTaskId, setProbeTaskId] = useState(null)
       const [probeTask, setProbeTask] = useState(null)
+      // 探测参数自动填充（来自 DSH 配置：模型列表 / baseURL / 密钥来源）
+      const [probeDefaults, setProbeDefaults] = useState(null)
+      const [probeDefaultsLoading, setProbeDefaultsLoading] = useState(false)
 
       const showStatus = useCallback((message, kind) => {
         setStatus({ message, kind: kind || 'info' })
@@ -781,16 +912,31 @@ window.__ModuleLoader__.load({
         })
       }, [providerId, call, dict, showStatus])
 
-      // 打开探测表单
+      // 打开探测表单：直接读取该服务商在 DSH 配置里的模型列表 / baseURL / 密钥来源
       const openProbeForm = useCallback(() => {
         if (!providerId) return
         setProbeModelId('')
         setProbeApiKey('')
         setProbeBaseUrl('')
+        setProbeDefaults(null)
         setProbeTaskId(null)
         setProbeTask(null)
         setProbeFormOpen(true)
-      }, [providerId])
+        setProbeDefaultsLoading(true)
+        call('getProbeDefaults', providerId).then((result) => {
+          setProbeDefaultsLoading(false)
+          if (result.ok && result.value) {
+            const info = result.value
+            setProbeDefaults(info)
+            if (Array.isArray(info.models) && info.models.length > 0) {
+              setProbeModelId(info.models[0].id)
+            }
+            if (info.baseUrl) setProbeBaseUrl(info.baseUrl)
+          } else {
+            showStatus((dict.probeDefaultsFailed || '读取服务商配置失败') + '：' + (result.error || 'unknown'), 'error')
+          }
+        })
+      }, [providerId, call, dict, showStatus])
 
       // 关闭探测表单
       const closeProbeForm = useCallback(() => {
@@ -801,8 +947,8 @@ window.__ModuleLoader__.load({
 
       // 启动探测任务
       const startProbeTask = useCallback(() => {
-        if (!providerId || !probeModelId.trim() || !probeApiKey.trim()) {
-          showStatus('providerId, modelId, apiKey 均为必填', 'error')
+        if (!providerId || !probeModelId.trim()) {
+          showStatus(dict.probeNeedModel || '请选择要探测的模型', 'error')
           return
         }
         setBusy('probe')
@@ -924,6 +1070,14 @@ window.__ModuleLoader__.load({
               type: 'button', className: 'rl-btn', 'data-variant': 'danger',
               disabled: !!busy || !providerId, onClick: removeCurrent,
             }, busy === 'remove' ? dict.removing : dict.removeProvider),
+            // 启用/停用开关并入服务商栏，避免单独占一行
+            h(TextSwitch, {
+              checked: form.enabled,
+              onChange: (v) => patch({ enabled: v }),
+              onText: dict.enabledOn,
+              offText: dict.enabledOff,
+              title: dict.enabledDesc,
+            }),
           )
 
       // 服务商卡片：标题（带问号提示）与操作同一行。
@@ -1057,11 +1211,6 @@ window.__ModuleLoader__.load({
           )
         : null
 
-      // 开关行
-      const enabledRow = h(Row, { key: 'enabled', title: dict.enabled, desc: dict.enabledDesc },
-        h(Switch, { checked: form.enabled, onChange: (v) => patch({ enabled: v }) }),
-      )
-
       const freeOnlyRow = h(Row, { key: 'freeOnly', title: dict.freeOnly, desc: dict.freeOnlyDesc },
         h(Switch, { checked: form.applyToFreeModelsOnly, disabled, onChange: (v) => patch({ applyToFreeModelsOnly: v }) }),
       )
@@ -1136,42 +1285,71 @@ window.__ModuleLoader__.load({
             h('div', { className: 'rl-probe-modal', onClick: (e) => e.stopPropagation() },
               h('div', { className: 'rl-probe-modal-header' },
                 h('h3', null, dict.probeTitle || '探测模型阈值'),
-                h('button', { type: 'button', className: 'rl-probe-close', onClick: closeProbeForm }, '×')
+                h('button', { type: 'button', className: 'rl-probe-close', onClick: closeProbeForm, 'aria-label': dict.close || '关闭' }, '×')
               ),
               h('div', { className: 'rl-probe-modal-body' },
                 !probeTaskId
                   ? h('div', { className: 'rl-probe-form' },
-                      h('div', { className: 'rl-probe-field' },
-                        h('label', null, dict.probeModelLabel || '模型 ID'),
-                        h('input', {
-                          type: 'text',
-                          className: 'rl-input',
-                          placeholder: dict.probeModelPlaceholder || '例如: nvidia/nemotron-3-ultra-550b-a55b',
-                          value: probeModelId,
-                          onChange: (e) => setProbeModelId(e.target.value),
-                          autoFocus: true
-                        })
-                      ),
-                      h('div', { className: 'rl-probe-field' },
+                      // 参数来源：直接来自 DSH 配置，无需手填
+                      probeDefaults || probeDefaultsLoading
+                        ? h('div', { className: 'rl-probe-source' },
+                            probeDefaultsLoading
+                              ? h('span', null, dict.probeLoadingDefaults || '正在读取服务商配置…')
+                              : [
+                                  h('span', { key: 'p', className: 'rl-probe-chip' }, probeDefaults.displayName || providerId),
+                                  probeDefaults.apiKeyEnv
+                                    ? h('span', {
+                                        key: 'k',
+                                        className: 'rl-probe-chip',
+                                        'data-tone': probeDefaults.apiKeyAvailable ? 'ok' : 'warn',
+                                      }, probeDefaults.apiKeyAvailable
+                                        ? (dict.probeKeyAuto || '密钥已自动读取') + ' · ' + probeDefaults.apiKeyEnv
+                                        : (dict.probeKeyMissing || '密钥未配置') + ' · ' + probeDefaults.apiKeyEnv)
+                                    : null,
+                                  probeDefaults.sourceFile
+                                    ? h('span', { key: 's', className: 'rl-probe-chip' }, dict.probeFromConfig || '来自 DSH 配置')
+                                    : null,
+                                ]
+                          )
+                        : null,
+
+                      h('div', { className: 'rl-probe-grid' },
+                        h('label', { htmlFor: undefined }, dict.probeModelLabel || '模型 ID'),
+                        Array.isArray(probeDefaults?.models) && probeDefaults.models.length > 0
+                          ? h('select', {
+                              className: 'rl-select',
+                              value: probeModelId,
+                              onChange: (e) => setProbeModelId(e.target.value),
+                            }, probeDefaults.models.map((model) =>
+                                h('option', { key: model.id, value: model.id },
+                                  model.name && model.name !== model.id ? model.name + '（' + model.id + '）' : model.id)
+                              ))
+                          : h('input', {
+                              type: 'text',
+                              className: 'rl-input',
+                              placeholder: dict.probeModelPlaceholder || '例如: nvidia/nemotron-3-ultra-550b-a55b',
+                              value: probeModelId,
+                              onChange: (e) => setProbeModelId(e.target.value),
+                            }),
+
+                        h('label', null, dict.probeBaseUrlLabel || 'Base URL'),
+                        h('div', { className: 'rl-probe-static', title: probeBaseUrl },
+                          probeBaseUrl || (dict.probeBaseUrlMissing || '未在配置中找到 baseURL，请在探测时手动指定')),
+
                         h('label', null, dict.probeApiKeyLabel || 'API Key'),
-                        h('input', {
-                          type: 'password',
-                          className: 'rl-input',
-                          placeholder: dict.probeApiKeyPlaceholder || 'sk-xxx...',
-                          value: probeApiKey,
-                          onChange: (e) => setProbeApiKey(e.target.value)
-                        })
+                        probeDefaults?.apiKeyAvailable
+                          ? h('div', { className: 'rl-probe-static' }, dict.probeKeyAutoHint || '已从 DSH 配置 / 环境变量自动读取，无需填写')
+                          : h('input', {
+                              type: 'password',
+                              className: 'rl-input',
+                              placeholder: probeDefaults?.apiKeyEnv
+                                ? (dict.probeKeyFallback || '未自动读取到，可在此手动填入') + ' ' + probeDefaults.apiKeyEnv
+                                : (dict.probeApiKeyPlaceholder || 'sk-xxx...'),
+                              value: probeApiKey,
+                              onChange: (e) => setProbeApiKey(e.target.value),
+                            }),
                       ),
-                      h('div', { className: 'rl-probe-field' },
-                        h('label', null, dict.probeBaseUrlLabel || 'API Base URL (可选)'),
-                        h('input', {
-                          type: 'text',
-                          className: 'rl-input',
-                          placeholder: 'https://api.example.com/v1',
-                          value: probeBaseUrl,
-                          onChange: (e) => setProbeBaseUrl(e.target.value)
-                        })
-                      ),
+
                       h('div', { className: 'rl-probe-actions' },
                         h('button', {
                           type: 'button', className: 'rl-btn',
@@ -1179,7 +1357,7 @@ window.__ModuleLoader__.load({
                         }, dict.cancel),
                         h('button', {
                           type: 'button', className: 'rl-btn', 'data-variant': 'primary',
-                          disabled: busy === 'probe' || !probeModelId.trim() || !probeApiKey.trim(),
+                          disabled: busy === 'probe' || !probeModelId.trim() || probeDefaultsLoading,
                           onClick: startProbeTask
                         }, busy === 'probe' ? dict.probing : (dict.probeStart || '开始探测'))
                       )
@@ -1217,7 +1395,6 @@ window.__ModuleLoader__.load({
         addForm,
         banner,
         rpdBanner,
-        enabledRow,
         h('div', { className: 'rl-group-title' }, dict.sectionLimits),
         limitRows,
         h('div', { className: 'rl-group-title' }, dict.sectionBackoff),

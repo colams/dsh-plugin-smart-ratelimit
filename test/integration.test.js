@@ -38,6 +38,9 @@ const { RequestInterceptor, requestInterceptor } = await import('../src/intercep
 const { mergeProviderConfig, CONFIG_PRIORITY } = await import('../src/config/configMerger.js');
 const { nvcfPoller, NVCFPoller, classifyError } = await import('../src/intercept/nvcfPoller.js');
 const { estimateTokens, calibrateModel, HeuristicTokenEstimator } = await import('../src/core/tokenEstimator.js');
+// 插件主类：用于验证「外部改配置后 getSettings 立即生效」的修复
+const { SmartRateLimitPlugin } = await import('../src/index.js');
+const { discoverProviders } = await import('../src/config/providerDiscovery.js');
 
 // 测试前清理
 before(async () => {
@@ -589,6 +592,46 @@ describe('令牌桶防突发测试', () => {
     
     assert.strictEqual(bucket.tokens, 0);
     assert.ok(bucket.lastRefill >= beforeRefill);
+  });
+});
+
+describe('外部修改配置文件后 getSettings 即时生效测试', () => {
+  it('CLI 改 settings 文件后，面板 getSettings 应立即返回新值并同步 limiter', async () => {
+    // 1. 构造插件实例（最小 ctx：provide 是 no-op，interceptor 为独立新实例避免污染其它用例）
+    const interceptor = new RequestInterceptor();
+    interceptor.initialize({}).catch(() => {});
+    const plugin = Object.create(SmartRateLimitPlugin.prototype);
+    plugin.interceptor = interceptor;
+    plugin.providerConfigs = {};
+    plugin.providers = [];
+
+    // 2. 初始化一个 provider 的限速器（模拟插件启动时已加载旧配置）
+    const initial = { rpm: 50, tpm: 50000, rpd: 0 };
+    interceptor.initialize({ 'ext-provider': initial });
+    let limiter = interceptor.manager.getLimiter('ext-provider');
+    assert.ok(limiter, '应已创建限速器');
+    assert.strictEqual(limiter.config.rpm, 50, '初始 RPM 应为 50');
+
+    // 3. 模拟 CLI/外部把 user_custom 层改写成 13/11700（与本次探测结果一致）
+    let settings = {};
+    if (existsSync(SETTINGS_FILE)) settings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf-8'));
+    settings['ext-provider'] = { rpm: 13, tpm: 11700, rpd: 0, priority: 'user_custom' };
+    writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+
+    // 4. 面板读取（模拟用户在「设置 → 速率设置」里看到 agnes/ext-provider）
+    const view = plugin.getSettings('ext-provider');
+    assert.strictEqual(view.rpm, 13, 'getSettings 应返回外部改后的 RPM 13（而非启动时的 50）');
+    assert.strictEqual(view.tpm, 11700, 'getSettings 应返回外部改后的 TPM 11700');
+    assert.strictEqual(view.priority, 'user_custom', '优先级应标记为 user_custom');
+
+    // 5. limiter 内存桶应被热更新到新值（保留桶水位、不重建）
+    limiter = interceptor.manager.getLimiter('ext-provider');
+    assert.strictEqual(limiter.config.rpm, 13, 'limiter 内存配置 RPM 应同步为 13');
+    assert.strictEqual(limiter.config.tpm, 11700, 'limiter 内存配置 TPM 应同步为 11700');
+
+    // 6. 恢复原配置（清理临时 provider，避免污染其它用例）
+    delete settings['ext-provider'];
+    writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
   });
 });
 
