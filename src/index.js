@@ -107,15 +107,13 @@ export class SmartRateLimitPlugin {
         });
       }
 
-      // 构建配置对象
+      // 构建配置对象：用 5 层优先级合并（全局兜底 -> 预设 -> 系统 -> 探测/历史 -> user_custom），
+      // 而非仅「预设默认 + 面板保存值」两层；与 getSettings/mergeProviderConfig 保持一致。
+      // 面板里手动新增的 provider（默认无预设）在此合并为通用兜底配置。
       const providerConfigs = {};
       for (const provider of providers) {
-        const defaultConfig = getDefaultConfig(provider.id);
-        const savedConfig = this.loadProviderSettings(provider.id);
-        
         providerConfigs[provider.id] = {
-          ...defaultConfig,
-          ...savedConfig,
+          ...mergeProviderConfig(provider.id),
           displayName: provider.displayName
         };
       }
@@ -340,6 +338,7 @@ export class SmartRateLimitPlugin {
   /**
    * 注册请求拦截器
    * 对接 DSH 的 llm/stream 钩子：包装流式响应，在首个 chunk 前 acquire、流结束后 release
+   * 兼容 Node.js 原生流与 Web API ReadableStream
    */
   registerRequestInterceptor() {
     if (!this.ctx.on || typeof this.ctx.on !== 'function') return;
@@ -352,6 +351,18 @@ export class SmartRateLimitPlugin {
 
       // 如果请求已标记跳过限速，直接透传
       if (request._skipRateLimit || request._isPolling) return stream;
+
+      // 将输入流统一转为 Web API ReadableStream
+      // DSH 可能传 Node.js 原生流，需用 toWeb() 转换（Node 17+）
+      let webStream = stream;
+      if (typeof stream.pipeThrough !== 'function' && typeof stream.toWeb === 'function') {
+        // Node.js 原生流转 Web API 流
+        webStream = stream.toWeb();
+      } else if (typeof stream.pipeThrough !== 'function') {
+        // 既不是 Web 流也无法转换，直接透传不拦截
+        console.warn('[SmartRateLimit] llm/stream: unsupported stream type, bypassing');
+        return stream;
+      }
 
       // 创建 TransformStream 包装器
       // - start: 流开始被消费时调用 acquire()
@@ -403,7 +414,7 @@ export class SmartRateLimitPlugin {
       });
 
       // 捕获流错误，确保 flush 能拿到 error
-      const wrappedStream = stream.pipeThrough(transformer);
+      const wrappedStream = webStream.pipeThrough(transformer);
       wrappedStream.getReader().closed.catch(err => {
         streamError = err;
         if (!streamEnded && acquired && requestWithRatelimit) {
@@ -487,22 +498,26 @@ export class SmartRateLimitPlugin {
   /**
    * 获取指定 Provider 的设置
    */
+  /**
+   * 获取指定 Provider 的设置
+   *
+   * 实时从 5 层合并（磁盘）计算有效配置，并把限速器内存桶同步到该配置。
+   * 这样外部/CLI 直接改 rate_limit_settings.json（user_custom 层）等文件后，
+   * 面板与运行限速都立即反映新值，无需重启 DSH。
+   * 同步 limiter 会保留桶水位、RPD 计数与 429 滑动窗口（updateConfig 热更新语义）。
+   */
   getSettings(providerId) {
-    const limiter = this.interceptor.manager.getLimiter(providerId);
-    const history = historyTracker.getSuggestion(providerId);
-    
-    // 使用配置合并器获取完整配置（包含正确的优先级）
     const mergedConfig = mergeProviderConfig(providerId);
-    
-    if (!limiter) {
-      return {
-        ...mergedConfig,
-        historySuggestion: history
-      };
+
+    const limiter = this.interceptor.manager.getLimiter(providerId, mergedConfig);
+    if (limiter) {
+      limiter.updateConfig(mergedConfig);
     }
-    
+
+    const history = historyTracker.getSuggestion(providerId);
+
     return {
-      ...limiter.config,
+      ...mergedConfig,
       priority: mergedConfig.priority || 'user_custom',
       historySuggestion: history
     };
