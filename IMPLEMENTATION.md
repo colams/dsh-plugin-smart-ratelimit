@@ -524,6 +524,7 @@ node scripts/probeModels.mjs -p nvidia -m nvidia/nemotron-3-ultra-550b-a55b -k "
 10. **面板无图标**：设置页菜单项只显示文字「速率设置」。
 11. **保存后不刷新优先级徽章**：保存只刷新监控数据，徽章保持当前表单里的值，重新进入面板才会重新读取。
 12. **`RateLimitSettingsView.css` 当前未被引用**：面板样式实际内联在 `client.js` 中。
+13. **`llm/stream` 监听器被 Cordis isolate 过滤器丢弃**（2026-11-21 实证）：`Service` 基类自带 `[symbols.filter]`（isolate 桶匹配），服务实例作为 waterfall 的 `thisArg` 时启用过滤；本插件未 join `llm` 桶，监听器被静默跳过，对话流量从未进入限速器（监控全零、429 历史为空）。修复：注册时传 `{ global: true }`。完整证据链与改造路线图见 [docs/2026-11-21-runtime-analysis.md](docs/2026-11-21-runtime-analysis.md)。
 
 ## 排查
 
